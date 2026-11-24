@@ -57,6 +57,8 @@
 - 📱 Mobile-friendly
 - 📈 Support mermaid syntax conversion to flowchart
 - ✨ Support markdown text conversion to mind map（New 🔥🔥🔥）
+- 🤖 Agent operation API ([docs](docs/agent-api.md))
+- 💬 Built-in AI chat page for direct canvas editing ([docs](docs/chat.md))
 
 
 ## About the Name
