@@ -46,6 +46,8 @@ import type { Language } from './i18n/types';
 import { Tutorial } from './components/tutorial';
 import { LASER_POINTER_CLASS_NAME } from './utils/laser-pointer';
 import { Toast, useToast } from './components/toast/toast';
+import type { DrawnixAgentOptions } from './agent/types';
+import { installDrawnixAgent } from './agent/drawnix-agent';
 
 export type DrawnixProps = {
   value: PlaitElement[];
@@ -69,6 +71,12 @@ export type DrawnixProps = {
   }) => void;
   onLanguageChange?: (language: Language) => void;
   afterInit?: (board: PlaitBoard) => void;
+  /**
+   * Expose the board operation API for automation agents.
+   * Pass `true` to install it on `window.drawnixAgent`, or customize the
+   * global name.
+   */
+  agent?: boolean | DrawnixAgentOptions;
   tutorial?: boolean;
 } & React.HTMLAttributes<HTMLDivElement>;
 
@@ -100,6 +108,7 @@ export const Drawnix: React.FC<DrawnixProps> = ({
   onPreferenceChange,
   onLanguageChange,
   afterInit,
+  agent = false,
   tutorial = false,
 }) => {
   const options: PlaitBoardOptions = {
@@ -174,6 +183,23 @@ export const Drawnix: React.FC<DrawnixProps> = ({
       setThemeColorMode(theme.themeColorMode);
     }
   }, [theme?.themeColorMode]);
+
+  const agentEnabled = Boolean(agent);
+  const agentGlobalName = typeof agent === 'object' ? agent.globalName : undefined;
+  const agentTarget = typeof agent === 'object' ? agent.target : undefined;
+
+  useEffect(() => {
+    if (!board || !agentEnabled) {
+      return;
+    }
+    const installation = installDrawnixAgent(board, {
+      globalName: agentGlobalName,
+      target: agentTarget,
+    });
+    return () => {
+      installation.dispose();
+    };
+  }, [board, agentEnabled, agentGlobalName, agentTarget]);
 
   const updateAppState = (newAppState: Partial<DrawnixState>) => {
     setAppState((currentAppState) => ({

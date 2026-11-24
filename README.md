@@ -57,6 +57,8 @@
 - 📱 移动设备适配
 - 📈 支持 mermaid 语法转流程图
 - ✨ 支持 markdown 文本转思维导图（新支持 🔥🔥🔥）
+- 🤖 提供 Agent 操作 API（[文档](docs/agent-api.md)）
+- 💬 内置 AI 对话页面，直接对话操作画布（[文档](docs/chat.md)）
 
 
 ## 关于名称
