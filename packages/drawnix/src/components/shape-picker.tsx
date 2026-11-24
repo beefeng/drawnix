@@ -25,6 +25,7 @@ export interface ShapeProps {
   icon: React.ReactNode;
   title: string;
   pointer: DrawPointerType;
+  keyBinding?: string;
 }
 
 export const SHAPES: ShapeProps[] = [
@@ -32,11 +33,13 @@ export const SHAPES: ShapeProps[] = [
     icon: RectangleIcon,
     title: 'toolbar.shape.rectangle',
     pointer: BasicShapes.rectangle,
+    keyBinding: 'R',
   },
   {
     icon: EllipseIcon,
     title: 'toolbar.shape.ellipse',
     pointer: BasicShapes.ellipse,
+    keyBinding: 'O',
   },
   {
     icon: TriangleIcon,
@@ -100,6 +103,7 @@ export const ShapePicker: React.FC<ShapePickerProps> = ({ onPointerUp }) => {
                     visible={true}
                     selected={PlaitBoard.isPointer(board, shape.pointer)}
                     icon={shape.icon}
+                    keyBindingLabel={shape.keyBinding}
                     title={t((shape.title || 'toolbar.shape') as keyof Translations)}
                     aria-label={t((shape.title || 'toolbar.shape') as keyof Translations)}
                     onPointerDown={() => {

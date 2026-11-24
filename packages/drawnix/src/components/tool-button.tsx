@@ -33,6 +33,8 @@ type ToolButtonBaseProps = {
     event: React.PointerEvent<HTMLElement>;
   }): void;
   onPointerUp?(data: { pointerType: EventPointerType }): void;
+  onMouseEnter?(): void;
+  onMouseLeave?(): void;
 };
 
 type ToolButtonProps =
@@ -129,6 +131,12 @@ export const ToolButton = React.forwardRef((props: ToolButtonProps, ref) => {
         onPointerUp={(event) => {
           props.onPointerUp?.({ pointerType: event.pointerType || null });
         }}
+        onMouseEnter={() => {
+          props.onMouseEnter?.();
+        }}
+        onMouseLeave={() => {
+          props.onMouseLeave?.();
+        }}
         ref={innerRef}
         disabled={isLoading || !!props.disabled}
       >
@@ -162,6 +170,12 @@ export const ToolButton = React.forwardRef((props: ToolButtonProps, ref) => {
         requestAnimationFrame(() => {
           lastPointerTypeRef.current = null;
         });
+      }}
+      onMouseEnter={() => {
+        props.onMouseEnter?.();
+      }}
+      onMouseLeave={() => {
+        props.onMouseLeave?.();
       }}
     >
       <input

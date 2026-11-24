@@ -73,6 +73,7 @@ export const FreehandPanel: React.FC<FreehandPickerProps> = ({
             size={'small'}
             visible={true}
             icon={freehand.icon}
+            keyBindingLabel={freehand.keyBinding}
             title={t(freehand.titleKey)}
             aria-label={t(freehand.titleKey)}
             onPointerDown={() => {
