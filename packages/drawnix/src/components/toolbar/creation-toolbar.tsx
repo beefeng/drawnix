@@ -26,7 +26,7 @@ import { ArrowLineShape, BasicShapes, DrawPointerType, FlowchartSymbols } from '
 import { FreehandPanel } from './freehand-panel/freehand-panel';
 import { ShapePicker, SHAPES } from '../shape-picker';
 import { ArrowPicker, ARROWS } from '../arrow-picker';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Popover, PopoverContent, PopoverTrigger } from '../popover/popover';
 import { FreehandShape } from '../../plugins/freehand/type';
 import {
@@ -52,10 +52,23 @@ type AppToolButtonProps = {
   icon: React.ReactNode;
   pointer?: DrawnixPointerType;
   key?: PopupKey | 'image' | 'extra-tools';
+  keyBinding?: string;
 };
 
 const isBasicPointer = (pointer: string) => {
   return pointer === PlaitPointerType.hand || pointer === PlaitPointerType.selection;
+};
+
+const HOVER_CLOSE_DELAY = 140;
+
+const SHAPE_KEY_BINDINGS: Partial<Record<string, string>> = {
+  [BasicShapes.rectangle]: 'R',
+  [BasicShapes.ellipse]: 'O',
+};
+
+const FREEHAND_KEY_BINDINGS: Partial<Record<string, string>> = {
+  [FreehandShape.feltTipPen]: 'P',
+  [FreehandShape.eraser]: 'E',
 };
 
 export const BUTTONS: AppToolButtonProps[] = [
@@ -63,31 +76,37 @@ export const BUTTONS: AppToolButtonProps[] = [
     icon: HandIcon,
     pointer: PlaitPointerType.hand,
     titleKey: 'toolbar.hand',
+    keyBinding: 'H',
   },
   {
     icon: SelectionIcon,
     pointer: PlaitPointerType.selection,
     titleKey: 'toolbar.selection',
+    keyBinding: 'V',
   },
   {
     icon: MindIcon,
     pointer: MindPointerType.mind,
     titleKey: 'toolbar.mind',
+    keyBinding: 'M',
   },
   {
     icon: TextIcon,
     pointer: BasicShapes.text,
     titleKey: 'toolbar.text',
+    keyBinding: 'T',
   },
   {
     icon: FeltTipPenIcon,
     pointer: FreehandShape.feltTipPen,
     titleKey: 'toolbar.pen',
     key: PopupKey.freehand,
+    keyBinding: 'P',
   },
   {
     icon: StraightArrowLineIcon,
     titleKey: 'toolbar.arrow',
+    keyBinding: 'A',
     key: PopupKey.arrow,
     pointer: ArrowLineShape.straight,
   },
@@ -101,6 +120,7 @@ export const BUTTONS: AppToolButtonProps[] = [
     icon: ImageIcon,
     titleKey: 'toolbar.image',
     key: 'image',
+    keyBinding: '⌘U',
   },
   {
     icon: ExtraToolsIcon,
@@ -159,6 +179,82 @@ export const CreationToolbar = () => {
     : toolState.lastArrowPointer;
   const lastShapeButton = SHAPES.find((shape) => shape.pointer === currentShapePointer);
   const lastArrowButton = ARROWS.find((arrow) => arrow.pointer === currentArrowPointer);
+  const freehandKeyBinding = FREEHAND_KEY_BINDINGS[lastFreehandButton.pointer ?? ''];
+  const shapeKeyBinding = SHAPE_KEY_BINDINGS[currentShapePointer];
+
+  const hoverCloseTimeoutRef = useRef<number | null>(null);
+
+  const cancelHoverClose = () => {
+    if (hoverCloseTimeoutRef.current !== null) {
+      window.clearTimeout(hoverCloseTimeoutRef.current);
+      hoverCloseTimeoutRef.current = null;
+    }
+  };
+
+  const scheduleHoverClose = (closeMenu: () => void) => {
+    cancelHoverClose();
+    hoverCloseTimeoutRef.current = window.setTimeout(() => {
+      hoverCloseTimeoutRef.current = null;
+      closeMenu();
+    }, HOVER_CLOSE_DELAY);
+  };
+
+  const openShapeMenu = () => {
+    setArrowOpen(false);
+    setFreehandOpen(false);
+    setShapeOpen(true);
+  };
+
+  const openArrowMenu = () => {
+    setShapeOpen(false);
+    setFreehandOpen(false);
+    setArrowOpen(true);
+  };
+
+  useEffect(() => {
+    return cancelHoverClose;
+  }, []);
+
+  const shapeHoverHandlers = appState.isMobile
+    ? {}
+    : {
+        onMouseEnter: () => {
+          cancelHoverClose();
+          openShapeMenu();
+        },
+        onMouseLeave: () => {
+          scheduleHoverClose(() => setShapeOpen(false));
+        },
+      };
+  const arrowHoverHandlers = appState.isMobile
+    ? {}
+    : {
+        onMouseEnter: () => {
+          cancelHoverClose();
+          openArrowMenu();
+        },
+        onMouseLeave: () => {
+          scheduleHoverClose(() => setArrowOpen(false));
+        },
+      };
+  const shapeContentHoverHandlers = {
+    onMouseEnter: () => {
+      cancelHoverClose();
+      setShapeOpen(true);
+    },
+    onMouseLeave: () => {
+      scheduleHoverClose(() => setShapeOpen(false));
+    },
+  };
+  const arrowContentHoverHandlers = {
+    onMouseEnter: () => {
+      cancelHoverClose();
+      setArrowOpen(true);
+    },
+    onMouseLeave: () => {
+      scheduleHoverClose(() => setArrowOpen(false));
+    },
+  };
 
   const updateToolState = (nextToolState: Partial<DrawnixToolState>) => {
     setAppState((currentAppState) => ({
@@ -251,6 +347,7 @@ export const CreationToolbar = () => {
                     visible={true}
                     selected={freehandOpen || checkCurrentPointerIsFreehand(board)}
                     icon={lastFreehandButton.icon}
+                    keyBindingLabel={freehandKeyBinding}
                     title={
                       lastFreehandButton.titleKey ? t(lastFreehandButton.titleKey) : 'Freehand'
                     }
@@ -317,10 +414,16 @@ export const CreationToolbar = () => {
                       (isShapePointer(board) && !PlaitBoard.isPointer(board, BasicShapes.text))
                     }
                     icon={lastShapeButton?.icon || button.icon}
+                    keyBindingLabel={shapeKeyBinding}
                     title={button.titleKey ? t(button.titleKey) : 'Shape'}
                     aria-label={button.titleKey ? t(button.titleKey) : 'Shape'}
-                    onPointerDown={() => {
-                      setShapeOpen(!shapeOpen);
+                    {...shapeHoverHandlers}
+                    onPointerDown={({ pointerType }) => {
+                      if (pointerType === 'touch' && shapeOpen) {
+                        setShapeOpen(false);
+                      } else {
+                        openShapeMenu();
+                      }
                       if (isShapePointer(board)) {
                         BoardTransforms.updatePointerType(board, board.pointer);
                       } else {
@@ -333,7 +436,11 @@ export const CreationToolbar = () => {
                     }}
                   />
                 </PopoverTrigger>
-                <PopoverContent container={container} initialFocus={-1}>
+                <PopoverContent
+                  container={container}
+                  initialFocus={-1}
+                  {...shapeContentHoverHandlers}
+                >
                   <ShapePicker
                     onPointerUp={(pointer: DrawPointerType) => {
                       setShapeOpen(false);
@@ -363,10 +470,16 @@ export const CreationToolbar = () => {
                     visible={true}
                     selected={arrowOpen || isArrowLinePointer(board)}
                     icon={lastArrowButton?.icon || button.icon}
+                    keyBindingLabel={button.keyBinding}
                     title={button.titleKey ? t(button.titleKey) : ''}
                     aria-label={button.titleKey ? t(button.titleKey) : ''}
-                    onPointerDown={() => {
-                      setArrowOpen(!arrowOpen);
+                    {...arrowHoverHandlers}
+                    onPointerDown={({ pointerType }) => {
+                      if (pointerType === 'touch' && arrowOpen) {
+                        setArrowOpen(false);
+                      } else {
+                        openArrowMenu();
+                      }
                       if (isArrowLinePointer(board)) {
                         BoardTransforms.updatePointerType(board, board.pointer);
                       } else {
@@ -379,7 +492,11 @@ export const CreationToolbar = () => {
                     }}
                   />
                 </PopoverTrigger>
-                <PopoverContent container={container} initialFocus={-1}>
+                <PopoverContent
+                  container={container}
+                  initialFocus={-1}
+                  {...arrowContentHoverHandlers}
+                >
                   <ArrowPicker
                     onPointerUp={(pointer: DrawPointerType) => {
                       setArrowOpen(false);
@@ -402,6 +519,7 @@ export const CreationToolbar = () => {
               type="radio"
               icon={button.icon}
               checked={isChecked(button)}
+              keyBindingLabel={button.keyBinding}
               title={button.titleKey ? t(button.titleKey) : ''}
               aria-label={button.titleKey ? t(button.titleKey) : ''}
               onPointerDown={() => {

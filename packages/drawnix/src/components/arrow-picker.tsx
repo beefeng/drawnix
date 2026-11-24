@@ -14,6 +14,7 @@ export interface ArrowProps {
   icon: React.ReactNode;
   title: string;
   pointer: ArrowLineShape;
+  keyBinding?: string;
 }
 
 export const ARROWS: ArrowProps[] = [
@@ -21,6 +22,7 @@ export const ARROWS: ArrowProps[] = [
     icon: StraightArrowIcon,
     title: 'toolbar.arrow.straight',
     pointer: ArrowLineShape.straight,
+    keyBinding: 'A',
   },
   {
     icon: ElbowArrowIcon,
@@ -54,6 +56,7 @@ export const ArrowPicker: React.FC<ArrowPickerProps> = ({ onPointerUp }) => {
               visible={true}
               selected={PlaitBoard.isPointer(board, arrow.pointer)}
               icon={arrow.icon}
+              keyBindingLabel={arrow.keyBinding}
               title={t(arrow.title as keyof Translations)}
               aria-label={t(arrow.title as keyof Translations)}
               onPointerDown={() => {

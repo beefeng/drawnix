@@ -11,6 +11,7 @@ export type FreehandToolItem = {
   titleKey: keyof Translations;
   icon: React.ReactNode;
   pointer: FreehandShape.feltTipPen | FreehandShape.eraser;
+  keyBinding?: string;
 };
 
 export const FREEHANDS: FreehandToolItem[] = [
@@ -18,10 +19,12 @@ export const FREEHANDS: FreehandToolItem[] = [
     icon: FeltTipPenIcon,
     pointer: FreehandShape.feltTipPen,
     titleKey: 'toolbar.pen',
+    keyBinding: 'P',
   },
   {
     icon: EraseIcon,
     pointer: FreehandShape.eraser,
     titleKey: 'toolbar.eraser',
+    keyBinding: 'E',
   },
 ];
