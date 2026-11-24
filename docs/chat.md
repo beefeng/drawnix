@@ -38,7 +38,19 @@ POST {Base URL}/chat/completions
 
 远程自建接口需要允许浏览器跨域访问（CORS），如果服务方禁止浏览器跨域请求，请填写自己的代理地址；不需要鉴权的接口可以把 API Key 留空。
 
-`127.0.0.1` / `localhost` 的模型接口会自动通过本地开发或预览服务器的同源代理转发，避免浏览器 CORS 限制。因此请使用 `npm start` 或 `vite preview` 打开本页面；直接打开静态构建产物或线上站点时无法访问你电脑上的 localhost 服务。
+### 本机模型与线上页面
+
+- 页面由 `npm start` / `vite preview` 提供（页面本身在 localhost）时，`127.0.0.1` / `localhost` 接口会自动走同源代理，规避 CORS。
+- 页面部署在公网（HTTPS）时，浏览器会直连你填写的 loopback 地址。这只对“浏览器和模型服务在同一台机器”的情况有效，并要求本机服务允许站点 Origin 跨域。
+- 使用 magpie 时，需要在本机网关的 **“允许调用 magpie 的网页”** 白名单里加入站点地址，例如：
+
+  ```text
+  https://drawnix.halosky.top
+  ```
+
+  然后在 Chat 设置里直接填 `http://127.0.0.1:3425/v1`（magpie 默认端口）。
+
+限制：HTTPS 页面访问 `http://127.0.0.1` 依赖浏览器对 loopback 的例外（Chrome/Edge 可用，Safari/Firefox 不保证）；换一台设备打开线上站点时，它连的是那台设备自己的 localhost，而不是你的 Mac。
 
 ## 工作方式
 

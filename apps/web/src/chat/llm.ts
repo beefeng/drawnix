@@ -378,7 +378,13 @@ const resolveRequestTarget = (baseUrl: string) => {
   }
   try {
     const target = new URL(endpoint, window.location.href);
-    if (isLoopbackHost(target.hostname) && target.origin !== window.location.origin) {
+    // 同源代理只存在于 vite dev / preview；线上页面必须直连 loopback 服务。
+    const pageIsLoopback = isLoopbackHost(window.location.hostname);
+    if (
+      pageIsLoopback &&
+      isLoopbackHost(target.hostname) &&
+      target.origin !== window.location.origin
+    ) {
       return {
         url: `${window.location.origin}${LLM_PROXY_PATH}?url=${encodeURIComponent(target.href)}`,
         viaProxy: true,
@@ -460,7 +466,7 @@ const callChatCompletions = async (
     signal,
     body: JSON.stringify(body),
   });
-  if (requestTarget.viaProxy && response.status === 404) {
+  if (requestTarget.viaProxy && (response.status === 404 || response.status === 405)) {
     throw new Error('本地模型代理不可用，请通过 npm start 或 vite preview 打开页面。');
   }
   const text = await response.text();
