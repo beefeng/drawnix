@@ -174,6 +174,23 @@ describe('chat llm tools', () => {
     expect(requestBody.tools).toBeUndefined();
   });
 
+  it('calls a loopback endpoint directly from a public page', async () => {
+    vi.stubGlobal('window', { location: new URL('https://drawnix.halosky.top/') });
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          choices: [{ message: { content: 'OK' } }],
+        }),
+        { status: 200 }
+      )
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await testLlmConnection(settings);
+
+    expect(String(fetchMock.mock.calls[0][0])).toBe('http://127.0.0.1:9999/v1/chat/completions');
+  });
+
   it('returns a tool error without throwing when arguments are invalid', () => {
     const { agent, execute } = createAgentMock();
 
