@@ -19,6 +19,7 @@ import {
   saveLlmSettings,
   testLlmConnection,
   type ChatMessage,
+  type ChatTurnEvent,
   type LlmSettings,
 } from './llm';
 import './chat.scss';
@@ -57,6 +58,25 @@ const createMessageId = () => {
   return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
 };
 
+const formatDuration = (durationMs: number) => {
+  if (durationMs < 1000) {
+    return `${durationMs}ms`;
+  }
+  const totalSeconds = Math.floor(durationMs / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  const parts: string[] = [];
+  if (hours > 0) {
+    parts.push(`${hours}时`);
+  }
+  if (hours > 0 || minutes > 0) {
+    parts.push(`${minutes}分`);
+  }
+  parts.push(`${seconds}秒`);
+  return parts.join('');
+};
+
 type ConnectionTestState = {
   status: 'idle' | 'testing' | 'success' | 'error';
   message?: string;
@@ -78,6 +98,10 @@ export function ChatApp() {
   const [messages, setMessages] = useState<ChatMessage[]>(() => loadChatMessages());
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
+  const [activity, setActivity] = useState('正在理解需求…');
+  const [elapsedMs, setElapsedMs] = useState(0);
+  const [reasoningChars, setReasoningChars] = useState(0);
+  const [liveMessageId, setLiveMessageId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [connectionTest, setConnectionTest] = useState<ConnectionTestState>({
     status: 'idle',
@@ -90,6 +114,9 @@ export function ChatApp() {
   const [agentReady, setAgentReady] = useState(false);
   const agentRef = useRef<DrawnixAgent | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const highlightTimerRef = useRef<number | null>(null);
+  const previousSelectionRef = useRef<string[]>([]);
+  const reasoningCharsRef = useRef(0);
   const messageListRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const resizeStartRef = useRef<{ startX: number; startWidth: number } | null>(null);
@@ -111,16 +138,35 @@ export function ChatApp() {
   }, []);
 
   useEffect(() => {
-    saveChatMessages(messages);
+    const saveTimer = window.setTimeout(() => saveChatMessages(messages), 300);
     const container = messageListRef.current;
     if (container) {
       container.scrollTop = container.scrollHeight;
     }
+    return () => window.clearTimeout(saveTimer);
   }, [messages]);
+
+  useEffect(() => {
+    if (!busy) {
+      setElapsedMs(0);
+      return;
+    }
+    const startedAt = Date.now();
+    setElapsedMs(0);
+    setReasoningChars(reasoningCharsRef.current);
+    const timer = window.setInterval(() => {
+      setElapsedMs(Date.now() - startedAt);
+      setReasoningChars(reasoningCharsRef.current);
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [busy]);
 
   useEffect(() => {
     return () => {
       abortRef.current?.abort();
+      if (highlightTimerRef.current) {
+        window.clearTimeout(highlightTimerRef.current);
+      }
     };
   }, []);
 
@@ -171,6 +217,11 @@ export function ChatApp() {
       setError('画布还在加载，请稍后再试。');
       return;
     }
+    previousSelectionRef.current = agent.getSelection().ids;
+    if (highlightTimerRef.current) {
+      window.clearTimeout(highlightTimerRef.current);
+      highlightTimerRef.current = null;
+    }
 
     const userMessage: ChatMessage = {
       id: createMessageId(),
@@ -178,9 +229,23 @@ export function ChatApp() {
       content: trimmed,
       createdAt: Date.now(),
     };
+    const assistantId = createMessageId();
     const nextMessages = [...messages, userMessage];
     const beforeElementCount = agent.getElements().length;
-    setMessages(nextMessages);
+    setMessages([
+      ...nextMessages,
+      {
+        id: assistantId,
+        role: 'assistant',
+        content: '',
+        createdAt: Date.now(),
+        steps: [],
+      },
+    ]);
+    setLiveMessageId(assistantId);
+    setActivity('正在理解需求…');
+    reasoningCharsRef.current = 0;
+    setReasoningChars(0);
     setInput('');
     setError(null);
     setSettingsOpen(false);
@@ -188,12 +253,101 @@ export function ChatApp() {
     const controller = new AbortController();
     abortRef.current = controller;
 
+    const handleTurnEvent = (event: ChatTurnEvent) => {
+      if (event.type === 'round_start') {
+        setActivity(event.round === 0 ? '正在理解需求…' : '正在根据工具结果继续处理…');
+        return;
+      }
+      if (event.type === 'text_delta') {
+        setActivity('正在生成回复…');
+        setMessages((current) =>
+          current.map((message) =>
+            message.id === assistantId
+              ? { ...message, content: `${message.content}${event.delta}` }
+              : message
+          )
+        );
+        return;
+      }
+      if (event.type === 'reasoning_delta') {
+        setActivity('正在思考…');
+        reasoningCharsRef.current += event.delta.length;
+        return;
+      }
+      if (event.type === 'tool_start') {
+        setActivity(`正在${event.label}…`);
+        reasoningCharsRef.current = 0;
+        setReasoningChars(0);
+        setMessages((current) =>
+          current.map((message) =>
+            message.id === assistantId
+              ? {
+                  ...message,
+                  steps: [
+                    ...(message.steps ?? []),
+                    {
+                      id: event.toolCallId,
+                      label: event.label,
+                      status: 'running' as const,
+                    },
+                  ],
+                }
+              : message
+          )
+        );
+        return;
+      }
+      setActivity(event.ok ? '正在整理结果…' : '正在处理错误…');
+      if (event.ok && event.elementIds && event.elementIds.length > 0) {
+        try {
+          agent.selectElements(event.elementIds);
+          if (highlightTimerRef.current) {
+            window.clearTimeout(highlightTimerRef.current);
+          }
+          highlightTimerRef.current = window.setTimeout(() => {
+            highlightTimerRef.current = null;
+            try {
+              agent.selectElements(previousSelectionRef.current);
+            } catch {
+              try {
+                agent.selectElements([]);
+              } catch {
+                // The board may have been destroyed before the restore runs.
+              }
+            }
+          }, 1600);
+        } catch {
+          // Highlighting is optional; keep the tool result if it fails.
+        }
+      }
+      setMessages((current) =>
+        current.map((message) =>
+          message.id === assistantId
+            ? {
+                ...message,
+                steps: (message.steps ?? []).map((step) =>
+                  step.id === event.toolCallId
+                    ? {
+                        ...step,
+                        status: event.ok ? ('success' as const) : ('error' as const),
+                        detail: event.detail,
+                        durationMs: event.durationMs,
+                      }
+                    : step
+                ),
+              }
+            : message
+        )
+      );
+    };
+
     try {
       const result = await runChatTurn({
         agent,
         settings,
         messages: nextMessages,
         signal: controller.signal,
+        onEvent: handleTurnEvent,
       });
       const shouldFitViewport =
         result.toolNames.includes('新增元素') &&
@@ -205,31 +359,38 @@ export function ChatApp() {
           // Fitting is a convenience; keep the successful tool result if it fails.
         }
       }
-      setMessages((current) => [
-        ...current,
-        {
-          id: createMessageId(),
-          role: 'assistant',
-          content: result.text || '已完成画布操作。',
-          createdAt: Date.now(),
-        },
-      ]);
+      setMessages((current) =>
+        current.map((message) =>
+          message.id === assistantId
+            ? { ...message, content: result.text || '已完成画布操作。' }
+            : message
+        )
+      );
     } catch (turnError) {
       if (controller.signal.aborted) {
-        setMessages((current) => [
-          ...current,
-          {
-            id: createMessageId(),
-            role: 'assistant',
-            content: '已停止本次操作。',
-            createdAt: Date.now(),
-          },
-        ]);
+        setMessages((current) =>
+          current.map((message) =>
+            message.id === assistantId ? { ...message, content: '已停止本次操作。' } : message
+          )
+        );
       } else {
-        setError(turnError instanceof Error ? turnError.message : String(turnError));
+        setMessages((current) =>
+          current.map((message) =>
+            message.id === assistantId
+              ? { ...message, content: '本次操作未完成，画布可能已被部分修改。' }
+              : message
+          )
+        );
+        const rawMessage = turnError instanceof Error ? turnError.message : String(turnError);
+        const isNetworkError =
+          /failed to fetch|network\s?error|networkerror|err_incomplete|terminated|socket/i.test(
+            rawMessage
+          );
+        setError(isNetworkError ? '网络连接中断，已保留上一轮的操作进度。' : rawMessage);
       }
     } finally {
       abortRef.current = null;
+      setLiveMessageId(null);
       setBusy(false);
       inputRef.current?.focus();
     }
@@ -298,6 +459,17 @@ export function ChatApp() {
     setMessages([]);
     setError(null);
     clearChatMessages();
+  };
+
+  const continueLastTask = () => {
+    const lastAssistant = [...messages].reverse().find((message) => message.role === 'assistant');
+    const completed = (lastAssistant?.steps ?? [])
+      .filter((step) => step.status === 'success')
+      .map((step) => `${step.label}${step.detail ? `：${step.detail}` : ''}`);
+    const summary = completed.length > 0 ? `中断前已完成：${completed.join('；')}。` : '';
+    void submitMessage(
+      `上一轮因网络错误中断。${summary}请先调用 get_document 读取当前画布，再继续完成剩余部分，不要重复已存在的元素。`
+    );
   };
 
   if (!loaded) {
@@ -478,27 +650,56 @@ export function ChatApp() {
                 <div className="chat-message__meta">
                   {message.role === 'user' ? 'YOU' : 'AGENT'}
                 </div>
-                <div className="chat-message__body">{message.content}</div>
+                {message.steps && message.steps.length > 0 && (
+                  <ol className="chat-steps" aria-label="执行步骤">
+                    {message.steps.map((step) => (
+                      <li key={step.id} className={`chat-step chat-step--${step.status}`}>
+                        <span className="chat-step__indicator" aria-hidden="true" />
+                        <span className="chat-step__label">{step.label}</span>
+                        {step.detail && <span className="chat-step__detail">{step.detail}</span>}
+                        {typeof step.durationMs === 'number' && (
+                          <span className="chat-step__time">{formatDuration(step.durationMs)}</span>
+                        )}
+                      </li>
+                    ))}
+                  </ol>
+                )}
+                {message.content && (
+                  <div
+                    className={`chat-message__body${
+                      busy && message.id === liveMessageId ? ' chat-message__body--streaming' : ''
+                    }`}
+                  >
+                    {message.content}
+                  </div>
+                )}
+                {busy && message.id === liveMessageId && (
+                  <div className="chat-thinking" role="status">
+                    <span />
+                    <span />
+                    <span />
+                    {!message.content && reasoningChars > 0
+                      ? `正在思考 · 已推理 ${reasoningChars} 字`
+                      : activity}{' '}
+                    · {formatDuration(elapsedMs)}
+                  </div>
+                )}
               </article>
             ))
-          )}
-
-          {busy && (
-            <div className="chat-thinking" role="status">
-              <span />
-              <span />
-              <span />
-              正在读取画布并操作
-            </div>
           )}
 
           {error && (
             <div className="chat-error" role="alert">
               <strong>请求失败</strong>
               <span>{error}</span>
-              <button type="button" onClick={() => setSettingsOpen(true)}>
-                检查模型设置
-              </button>
+              <div className="chat-error__actions">
+                <button type="button" onClick={continueLastTask}>
+                  继续上次任务
+                </button>
+                <button type="button" onClick={() => setSettingsOpen(true)}>
+                  检查模型设置
+                </button>
+              </div>
             </div>
           )}
         </div>
