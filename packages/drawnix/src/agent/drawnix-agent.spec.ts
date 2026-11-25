@@ -11,6 +11,7 @@ import {
 import { setupDrawnixTestingBoard } from '../../testing';
 import type { DrawnixTestingBoardFixture } from '../../testing';
 import { createDrawnixAgent, installDrawnixAgent } from './drawnix-agent';
+import type { DrawnixAgentElementInput } from './types';
 
 const getTextContent = (value: unknown): string | undefined => {
   const text = value as { children?: Array<{ text?: string }> } | undefined;
@@ -83,6 +84,25 @@ describe('drawnix agent', () => {
       [200, 25],
     ]);
     expect(getTextContent(arrow.texts[0].text)).toBe('calls');
+  });
+
+  it('treats elbow-shaped input without kind as an arrow', () => {
+    const agent = setupAgent();
+
+    agent.addElements([
+      { id: 'source', shape: BasicShapes.rectangle, x: 0, y: 0, width: 100, height: 50 },
+      { id: 'target', shape: BasicShapes.rectangle, x: 200, y: 0, width: 100, height: 50 },
+      {
+        id: 'arrow',
+        shape: ArrowLineShape.elbow,
+        from: { elementId: 'source' },
+        to: { elementId: 'target' },
+      } as unknown as DrawnixAgentElementInput,
+    ]);
+
+    const arrow = agent.getElements().find((element) => element.id === 'arrow') as PlaitArrowLine;
+    expect(arrow.type).toBe('arrow-line');
+    expect(arrow.shape).toBe(ArrowLineShape.elbow);
   });
 
   it('binds new arrows to elements that already exist on the board', () => {

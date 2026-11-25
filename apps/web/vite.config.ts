@@ -1,9 +1,11 @@
 /// <reference types='vitest' />
 import { defineConfig, type Connect, type Plugin } from 'vite';
+import { Readable } from 'node:stream';
 import react from '@vitejs/plugin-react';
 import { nxViteTsPaths } from '@nx/vite/plugins/nx-tsconfig-paths.plugin';
 
 const LLM_PROXY_PATH = '/__drawnix_llm_proxy';
+const UPSTREAM_IDLE_TIMEOUT_MS = 180000;
 const REQUEST_HOP_BY_HOP_HEADERS = new Set([
   'accept-encoding',
   'connection',
@@ -95,13 +97,29 @@ const createLlmProxyMiddleware = (): Connect.NextHandleFunction => {
           }
         });
 
+        const abortController = new AbortController();
+        let idleTimer: ReturnType<typeof setTimeout> | undefined;
+        const clearIdleTimer = () => {
+          if (idleTimer) {
+            clearTimeout(idleTimer);
+            idleTimer = undefined;
+          }
+        };
+        const resetIdleTimer = () => {
+          clearIdleTimer();
+          idleTimer = setTimeout(() => abortController.abort(), UPSTREAM_IDLE_TIMEOUT_MS);
+        };
+        res.on('close', clearIdleTimer);
+        res.on('close', () => abortController.abort());
+        resetIdleTimer();
         const upstream = await fetch(targetUrl, {
           method: req.method || 'GET',
           headers,
           body: req.method === 'GET' || req.method === 'HEAD' ? undefined : body,
           redirect: 'manual',
-          signal: AbortSignal.timeout(30000),
+          signal: abortController.signal,
         });
+        resetIdleTimer();
         res.statusCode = upstream.status;
         upstream.headers.forEach((value, key) => {
           if (!RESPONSE_HOP_BY_HOP_HEADERS.has(key.toLowerCase())) {
@@ -109,10 +127,32 @@ const createLlmProxyMiddleware = (): Connect.NextHandleFunction => {
           }
         });
         res.setHeader('Cache-Control', 'no-store');
-        res.end(Buffer.from(await upstream.arrayBuffer()));
+        res.flushHeaders?.();
+        if (!upstream.body) {
+          res.end();
+          return;
+        }
+        const source = Readable.fromWeb(
+          upstream.body as unknown as import('node:stream/web').ReadableStream<Uint8Array>
+        );
+        source.on('data', resetIdleTimer);
+        source.on('end', clearIdleTimer);
+        source.on('close', clearIdleTimer);
+        source.on('error', () => {
+          clearIdleTimer();
+          if (!res.writableEnded) {
+            res.destroy();
+          }
+        });
+        res.on('close', () => source.destroy());
+        source.pipe(res);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        sendProxyError(res, 502, `Local model proxy failed: ${message}`);
+        if (res.headersSent) {
+          res.end();
+        } else {
+          sendProxyError(res, 502, `Local model proxy failed: ${message}`);
+        }
       }
     })();
   };

@@ -114,7 +114,11 @@ const cloneValue = <T>(value: T): T => {
 };
 
 const isArrowInput = (element: DrawnixAgentElementInput): element is DrawnixAgentArrowInput => {
-  return element.kind === 'arrow';
+  if (element.kind === 'arrow') {
+    return true;
+  }
+  // 模型经常省略 kind，只传 shape: elbow / curve / straight。
+  return ARROW_SHAPE_VALUES.has(String(element.shape));
 };
 
 const getShapePoints = (input: DrawnixAgentShapeInput): [Point, Point] => {
@@ -585,7 +589,9 @@ export class DrawnixAgentImpl implements DrawnixAgent {
         }
         const index = getElementIndex(this.board, update.id);
         if (index === -1) {
-          throw new DrawnixAgentError(`Element not found: ${update.id}`);
+          throw new DrawnixAgentError(
+            `Element not found: ${update.id} (refresh ids with get_document)`
+          );
         }
         const element = this.board.children[index];
         const nextElement = isArrowElement(element)

@@ -16,7 +16,37 @@ export type ChatMessage = {
   role: 'user' | 'assistant';
   content: string;
   createdAt: number;
+  steps?: ChatStep[];
 };
+
+export type ChatStep = {
+  id: string;
+  label: string;
+  status: 'running' | 'success' | 'error';
+  detail?: string;
+  durationMs?: number;
+};
+
+export type ChatTurnEvent =
+  | { type: 'round_start'; round: number }
+  | { type: 'text_delta'; delta: string }
+  | { type: 'reasoning_delta'; delta: string }
+  | {
+      type: 'tool_start';
+      toolCallId: string;
+      toolName: string;
+      label: string;
+    }
+  | {
+      type: 'tool_end';
+      toolCallId: string;
+      toolName: string;
+      label: string;
+      ok: boolean;
+      detail: string;
+      durationMs: number;
+      elementIds?: string[];
+    };
 
 type OpenAiToolCall = {
   id: string;
@@ -48,16 +78,59 @@ type OpenAiResponse = {
   };
 };
 
-export const DEFAULT_LLM_SETTINGS: LlmSettings = {
+type OpenAiToolCallDelta = {
+  index?: number;
+  id?: string;
+  type?: 'function';
+  function?: {
+    name?: string;
+    arguments?: string;
+  };
+};
+
+type OpenAiStreamChunk = {
+  model?: string;
+  choices?: Array<{
+    delta?: {
+      content?: string | null;
+      reasoning_content?: string | null;
+      reasoning?: string | null;
+      tool_calls?: OpenAiToolCallDelta[];
+    };
+  }>;
+  error?: {
+    message?: string;
+  };
+};
+
+const PRODUCTION_LLM_SETTINGS: LlmSettings = {
   baseUrl: 'https://api.openai.com/v1',
   apiKey: '',
   model: 'gpt-4.1-mini',
 };
 
+// 仅本地 dev 生效；生产构建不会加载 .env.development.local，且 DEV 会被静态替换为 false。
+const DEV_LLM_SETTINGS: LlmSettings = {
+  baseUrl: import.meta.env.VITE_DEV_LLM_BASE_URL || '',
+  apiKey: import.meta.env.VITE_DEV_LLM_API_KEY || '',
+  model: import.meta.env.VITE_DEV_LLM_MODEL || '',
+};
+
+export const DEFAULT_LLM_SETTINGS: LlmSettings =
+  import.meta.env.DEV && DEV_LLM_SETTINGS.baseUrl ? DEV_LLM_SETTINGS : PRODUCTION_LLM_SETTINGS;
+
 const LLM_SETTINGS_KEY = 'drawnix_chat_llm_settings';
 const CHAT_MESSAGES_KEY = 'drawnix_chat_messages';
-const MAX_TOOL_ROUNDS = 5;
+const MAX_TOOL_ROUNDS = 100;
 const LLM_PROXY_PATH = '/__drawnix_llm_proxy';
+
+const IS_DEV_DIAGNOSTICS = import.meta.env.DEV && import.meta.env.MODE !== 'test';
+
+const nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+
+const formatLogDuration = (durationMs: number) => {
+  return durationMs < 1000 ? `${Math.round(durationMs)}ms` : `${(durationMs / 1000).toFixed(1)}s`;
+};
 
 const TOOL_SCHEMA = [
   {
@@ -325,7 +398,12 @@ export const loadLlmSettings = (): LlmSettings => {
     if (!stored) {
       return { ...DEFAULT_LLM_SETTINGS };
     }
-    return { ...DEFAULT_LLM_SETTINGS, ...JSON.parse(stored) };
+    const parsed = JSON.parse(stored) as Partial<LlmSettings>;
+    // dev 下旧的空 Key 配置不应覆盖本地默认模型。
+    if (import.meta.env.DEV && !parsed.apiKey?.trim()) {
+      return { ...DEFAULT_LLM_SETTINGS };
+    }
+    return { ...DEFAULT_LLM_SETTINGS, ...parsed };
   } catch {
     return { ...DEFAULT_LLM_SETTINGS };
   }
@@ -349,7 +427,10 @@ export const loadChatMessages = (): ChatMessage[] => {
 };
 
 export const saveChatMessages = (messages: ChatMessage[]) => {
-  localStorage.setItem(CHAT_MESSAGES_KEY, JSON.stringify(messages.slice(-80)));
+  const persistable = messages.filter(
+    (message) => message.role === 'user' || message.content.trim().length > 0
+  );
+  localStorage.setItem(CHAT_MESSAGES_KEY, JSON.stringify(persistable.slice(-80)));
 };
 
 export const clearChatMessages = () => {
@@ -435,16 +516,175 @@ const buildSystemPrompt = (agent: DrawnixAgent) => {
     '6. 布局保持清晰：同层间距 80-160，主干流程从左到右或从上到下。',
     '7. 不要编造画布上不存在的内容；用户说“刚才的/选中的”时先读取当前文档。',
     '8. 操作完成后用简洁中文说明做了什么。',
+    '9. 思考尽量精简：确定方案后直接调用工具，不要反复推演或重复读取相同内容。',
     `当前画布摘要：${JSON.stringify(summarizeDocument(agent))}`,
   ].join('\n');
+};
+
+const readStreamingCompletion = async (
+  response: Response,
+  handlers: {
+    onTextDelta?: (delta: string) => void;
+    onReasoningDelta?: (delta: string) => void;
+  } = {}
+): Promise<OpenAiResponse> => {
+  const { onTextDelta, onReasoningDelta } = handlers;
+  const contentType = response.headers.get('content-type') || '';
+  if (!response.body || contentType.includes('application/json')) {
+    const text = await response.text();
+    return text ? (JSON.parse(text) as OpenAiResponse) : {};
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  const toolCalls = new Map<number, OpenAiToolCall>();
+  let content = '';
+  let model: string | undefined;
+  let buffer = '';
+
+  const handlePayload = (payload: string) => {
+    if (!payload || payload === '[DONE]') {
+      return;
+    }
+    let chunk: OpenAiStreamChunk;
+    try {
+      chunk = JSON.parse(payload) as OpenAiStreamChunk;
+    } catch {
+      return;
+    }
+    if (chunk.error?.message) {
+      throw new Error(chunk.error.message);
+    }
+    if (chunk.model) {
+      model = chunk.model;
+    }
+    const delta = chunk.choices?.[0]?.delta;
+    if (!delta) {
+      return;
+    }
+    if (delta.content) {
+      content += delta.content;
+      onTextDelta?.(delta.content);
+    }
+    const reasoning = delta.reasoning_content ?? delta.reasoning;
+    if (reasoning) {
+      onReasoningDelta?.(reasoning);
+    }
+    delta.tool_calls?.forEach((toolCall, position) => {
+      const index = typeof toolCall.index === 'number' ? toolCall.index : position;
+      const current = toolCalls.get(index) ?? {
+        id: '',
+        type: 'function' as const,
+        function: { name: '', arguments: '' },
+      };
+      if (toolCall.id) {
+        current.id = toolCall.id;
+      }
+      if (toolCall.function?.name) {
+        current.function.name = toolCall.function.name;
+      }
+      if (toolCall.function?.arguments) {
+        current.function.arguments += toolCall.function.arguments;
+      }
+      toolCalls.set(index, current);
+    });
+  };
+
+  const handleBlock = (block: string) => {
+    const payload = block
+      .split('\n')
+      .filter((line) => line.startsWith('data:'))
+      .map((line) => line.slice(5).trimStart())
+      .join('\n');
+    handlePayload(payload);
+  };
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      buffer = (buffer + decoder.decode(value, { stream: true })).replace(/\r\n/g, '\n');
+      let boundary = buffer.indexOf('\n\n');
+      while (boundary >= 0) {
+        handleBlock(buffer.slice(0, boundary));
+        buffer = buffer.slice(boundary + 2);
+        boundary = buffer.indexOf('\n\n');
+      }
+    }
+    if (buffer.trim()) {
+      handleBlock(buffer);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const assembledToolCalls = [...toolCalls.entries()]
+    .sort(([left], [right]) => left - right)
+    .map(([, toolCall]) => toolCall);
+
+  return {
+    model,
+    choices: [
+      {
+        message: {
+          content: content || null,
+          tool_calls: assembledToolCalls.length > 0 ? assembledToolCalls : undefined,
+        },
+      },
+    ],
+  };
+};
+
+type ChatCompletionOptions = {
+  includeTools?: boolean;
+  stream?: boolean;
+  onTextDelta?: (delta: string) => void;
+  onReasoningDelta?: (delta: string) => void;
+};
+
+const RETRYABLE_STATUS = new Set([502, 503, 504]);
+
+const waitForRetry = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+const requestWithRetry = async (
+  url: string,
+  init: RequestInit,
+  signal?: AbortSignal
+): Promise<Response> => {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const response = await fetch(url, init);
+      if (RETRYABLE_STATUS.has(response.status) && attempt === 0) {
+        void response.body?.cancel().catch(() => {});
+        await waitForRetry(400);
+        continue;
+      }
+      return response;
+    } catch (error) {
+      if (signal?.aborted) {
+        throw error;
+      }
+      lastError = error;
+      if (attempt === 0) {
+        await waitForRetry(400);
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw lastError ?? new Error('模型请求失败');
 };
 
 const callChatCompletions = async (
   settings: LlmSettings,
   messages: OpenAiMessage[],
-  signal?: AbortSignal,
-  includeTools = true
+  options: ChatCompletionOptions = {},
+  signal?: AbortSignal
 ): Promise<OpenAiResponse> => {
+  const { includeTools = true, stream = false, onTextDelta, onReasoningDelta } = options;
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
   };
@@ -459,26 +699,43 @@ const callChatCompletions = async (
     body.tools = TOOL_SCHEMA;
     body.tool_choice = 'auto';
   }
+  if (stream) {
+    body.stream = true;
+  }
   const requestTarget = resolveRequestTarget(settings.baseUrl);
-  const response = await fetch(requestTarget.url, {
-    method: 'POST',
-    headers,
-    signal,
-    body: JSON.stringify(body),
-  });
+  const response = await requestWithRetry(
+    requestTarget.url,
+    {
+      method: 'POST',
+      headers,
+      signal,
+      body: JSON.stringify(body),
+    },
+    signal
+  );
   if (requestTarget.viaProxy && (response.status === 404 || response.status === 405)) {
     throw new Error('本地模型代理不可用，请通过 npm start 或 vite preview 打开页面。');
+  }
+  if (!response.ok) {
+    const text = await response.text();
+    let data: OpenAiResponse = {};
+    try {
+      data = text ? (JSON.parse(text) as OpenAiResponse) : {};
+    } catch {
+      // Keep the raw body as the error message below.
+    }
+    const message = data.error?.message || text.slice(0, 300) || response.statusText;
+    throw new Error(`模型请求失败（HTTP ${response.status}）：${message}`);
+  }
+  if (stream) {
+    return readStreamingCompletion(response, { onTextDelta, onReasoningDelta });
   }
   const text = await response.text();
   let data: OpenAiResponse;
   try {
-    data = text ? JSON.parse(text) : {};
+    data = text ? (JSON.parse(text) as OpenAiResponse) : {};
   } catch {
     throw new Error(`模型返回了非 JSON 内容（HTTP ${response.status}）：${text.slice(0, 300)}`);
-  }
-  if (!response.ok) {
-    const message = data.error?.message || text.slice(0, 300) || response.statusText;
-    throw new Error(`模型请求失败（HTTP ${response.status}）：${message}`);
   }
   return data;
 };
@@ -506,8 +763,8 @@ export const testLlmConnection = async (
   const data = await callChatCompletions(
     settings,
     [{ role: 'user', content: '请只回复 OK' }],
-    signal,
-    false
+    { includeTools: false },
+    signal
   );
   const reply = data.choices?.[0]?.message?.content?.trim();
   if (!reply) {
@@ -526,6 +783,60 @@ const toExecutionError = (message: string): DrawnixAgentOperationResult => ({
     message,
   },
 });
+
+const getArrayLength = (value: unknown): number | null => {
+  return Array.isArray(value) ? value.length : null;
+};
+
+const getElementIds = (value: unknown): string[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((element) => (element as { id?: unknown } | null)?.id)
+    .filter((id): id is string => typeof id === 'string' && id.length > 0);
+};
+
+const describeToolResult = (toolName: string, result: DrawnixAgentOperationResult): string => {
+  if (!result.ok) {
+    return result.error.message || '执行失败';
+  }
+  const data = result.result;
+  switch (toolName) {
+    case 'get_document': {
+      const count = getArrayLength((data as { elements?: unknown } | null)?.elements);
+      return count === null ? '已读取画布' : `读取到 ${count} 个元素`;
+    }
+    case 'add_elements': {
+      const count = getArrayLength(data);
+      return count === null ? '已新增元素' : `新增 ${count} 个元素`;
+    }
+    case 'update_elements': {
+      const count = getArrayLength(data);
+      return count === null ? '已更新元素' : `更新 ${count} 个元素`;
+    }
+    case 'delete_elements': {
+      const count = getArrayLength(data);
+      return count === null ? '已删除元素' : `删除 ${count} 个元素`;
+    }
+    case 'select_elements': {
+      const count = getArrayLength((data as { ids?: unknown } | null)?.ids);
+      return count === null ? '已选中元素' : `选中 ${count} 个元素`;
+    }
+    case 'clear_canvas':
+      return '已清空画布';
+    case 'set_viewport':
+      return '已调整视口';
+    case 'fit_viewport':
+      return '已适应画布';
+    case 'undo':
+      return '已撤销上一步';
+    case 'redo':
+      return '已重做';
+    default:
+      return '已完成';
+  }
+};
 
 export const executeToolCall = (
   agent: DrawnixAgent,
@@ -589,6 +900,7 @@ export type RunChatTurnOptions = {
   settings: LlmSettings;
   messages: ChatMessage[];
   signal?: AbortSignal;
+  onEvent?: (event: ChatTurnEvent) => void;
 };
 
 export type RunChatTurnResult = {
@@ -601,6 +913,7 @@ export const runChatTurn = async ({
   settings,
   messages,
   signal,
+  onEvent,
 }: RunChatTurnOptions): Promise<RunChatTurnResult> => {
   assertSettingsUsable(settings);
 
@@ -615,40 +928,108 @@ export const runChatTurn = async ({
       })),
   ];
   const toolNames: string[] = [];
+  let roundCount = 0;
+  let totalModelMs = 0;
+  let totalToolMs = 0;
+
+  const logTurnSummary = () => {
+    if (!IS_DEV_DIAGNOSTICS) {
+      return;
+    }
+    console.debug(
+      `[drawnix-agent] 本轮结束：${roundCount} 轮，模型 ${formatLogDuration(
+        totalModelMs
+      )}，工具 ${formatLogDuration(totalToolMs)}`
+    );
+  };
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-    const data = await callChatCompletions(settings, apiMessages, signal);
+    roundCount = round + 1;
+    onEvent?.({ type: 'round_start', round });
+    const roundStartedAt = nowMs();
+    const data = await callChatCompletions(
+      settings,
+      apiMessages,
+      {
+        stream: true,
+        onTextDelta: (delta) => onEvent?.({ type: 'text_delta', delta }),
+        onReasoningDelta: (delta) => onEvent?.({ type: 'reasoning_delta', delta }),
+      },
+      signal
+    );
+    const modelMs = nowMs() - roundStartedAt;
+    totalModelMs += modelMs;
     const assistant = data.choices?.[0]?.message;
     if (!assistant) {
       throw new Error(data.error?.message || '模型没有返回消息');
     }
 
     const toolCalls = assistant.tool_calls ?? [];
+    let roundToolMs = 0;
+    const roundToolLabels: string[] = [];
+
+    if (toolCalls.length > 0) {
+      apiMessages.push({
+        role: 'assistant',
+        content: assistant.content ?? null,
+        tool_calls: toolCalls,
+      });
+
+      for (const [index, toolCall] of toolCalls.entries()) {
+        const toolCallId = toolCall.id || `${round}-${index}`;
+        const toolName = toolCall.function.name;
+        const label = TOOL_LABELS[toolName] || toolName;
+        onEvent?.({ type: 'tool_start', toolCallId, toolName, label });
+        const startedAt = nowMs();
+        const result = executeToolCall(agent, toolCall);
+        const durationMs = Math.max(0, Math.round(nowMs() - startedAt));
+        roundToolMs += durationMs;
+        totalToolMs += durationMs;
+        roundToolLabels.push(label);
+        onEvent?.({
+          type: 'tool_end',
+          toolCallId,
+          toolName,
+          label,
+          ok: result.ok,
+          detail: describeToolResult(toolName, result),
+          durationMs,
+          elementIds:
+            result.ok && (toolName === 'add_elements' || toolName === 'update_elements')
+              ? getElementIds(result.result)
+              : undefined,
+        });
+        toolNames.push(label);
+        apiMessages.push({
+          role: 'tool',
+          tool_call_id: toolCallId,
+          name: toolName,
+          content: JSON.stringify(result),
+        });
+      }
+    }
+
+    if (IS_DEV_DIAGNOSTICS) {
+      const toolSummary = roundToolLabels.length
+        ? `，${roundToolLabels.length} 次：${roundToolLabels.join('、')}`
+        : '';
+      console.debug(
+        `[drawnix-agent] 第 ${round + 1} 轮：模型 ${formatLogDuration(
+          modelMs
+        )}，工具 ${formatLogDuration(roundToolMs)}${toolSummary}`
+      );
+    }
+
     if (toolCalls.length === 0) {
+      logTurnSummary();
       return {
         text: assistant.content?.trim() || (toolNames.length ? '已完成画布操作。' : ''),
         toolNames,
       };
     }
-
-    apiMessages.push({
-      role: 'assistant',
-      content: assistant.content ?? null,
-      tool_calls: toolCalls,
-    });
-
-    for (const toolCall of toolCalls) {
-      const result = executeToolCall(agent, toolCall);
-      toolNames.push(TOOL_LABELS[toolCall.function.name] || toolCall.function.name);
-      apiMessages.push({
-        role: 'tool',
-        tool_call_id: toolCall.id,
-        name: toolCall.function.name,
-        content: JSON.stringify(result),
-      });
-    }
   }
 
+  logTurnSummary();
   return {
     text: '工具调用次数已达到上限，请继续描述下一步操作。',
     toolNames,

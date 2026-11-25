@@ -506,10 +506,91 @@
   border-left: 2px solid var(--chat-primary);
 }
 
+.chat-message__body--streaming::after {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 13px;
+  margin-left: 2px;
+  vertical-align: -2px;
+  background: var(--chat-primary);
+  animation: chat-caret 1s steps(2, start) infinite;
+}
+
+@keyframes chat-caret {
+  50% {
+    opacity: 0;
+  }
+}
+
+.chat-steps {
+  display: grid;
+  gap: 6px;
+  margin: 8px 0 10px;
+  padding: 0;
+  list-style: none;
+}
+
+.chat-step {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  color: var(--chat-text-secondary);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.chat-step__indicator {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  background: var(--chat-border-strong);
+  border-radius: 50%;
+}
+
+.chat-step--running .chat-step__indicator {
+  background: var(--chat-primary);
+  animation: chat-pulse 1s ease-in-out infinite;
+}
+
+.chat-step--success .chat-step__indicator {
+  background: var(--chat-success);
+}
+
+.chat-step--error .chat-step__indicator {
+  background: var(--chat-error-text);
+}
+
+.chat-step__label {
+  flex: none;
+  color: var(--chat-text);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.chat-step__detail {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-step--error .chat-step__detail {
+  color: var(--chat-error-text);
+}
+
+.chat-step__time {
+  flex: none;
+  margin-left: auto;
+  color: var(--chat-text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
 .chat-thinking {
   display: flex;
   align-items: center;
   gap: 5px;
+  margin-top: 8px;
   color: var(--chat-text-secondary);
   font-size: 11px;
 }
@@ -560,6 +641,12 @@
   color: var(--chat-error-text);
   font-size: 10px;
   letter-spacing: 0.04em;
+}
+
+.chat-error__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 .chat-error button {
