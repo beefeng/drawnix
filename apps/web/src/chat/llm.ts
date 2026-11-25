@@ -121,8 +121,16 @@ export const DEFAULT_LLM_SETTINGS: LlmSettings =
 
 const LLM_SETTINGS_KEY = 'drawnix_chat_llm_settings';
 const CHAT_MESSAGES_KEY = 'drawnix_chat_messages';
-const MAX_TOOL_ROUNDS = 20;
+const MAX_TOOL_ROUNDS = 100;
 const LLM_PROXY_PATH = '/__drawnix_llm_proxy';
+
+const IS_DEV_DIAGNOSTICS = import.meta.env.DEV && import.meta.env.MODE !== 'test';
+
+const nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+
+const formatLogDuration = (durationMs: number) => {
+  return durationMs < 1000 ? `${Math.round(durationMs)}ms` : `${(durationMs / 1000).toFixed(1)}s`;
+};
 
 const TOOL_SCHEMA = [
   {
@@ -508,6 +516,7 @@ const buildSystemPrompt = (agent: DrawnixAgent) => {
     '6. 布局保持清晰：同层间距 80-160，主干流程从左到右或从上到下。',
     '7. 不要编造画布上不存在的内容；用户说“刚才的/选中的”时先读取当前文档。',
     '8. 操作完成后用简洁中文说明做了什么。',
+    '9. 思考尽量精简：确定方案后直接调用工具，不要反复推演或重复读取相同内容。',
     `当前画布摘要：${JSON.stringify(summarizeDocument(agent))}`,
   ].join('\n');
 };
@@ -919,9 +928,25 @@ export const runChatTurn = async ({
       })),
   ];
   const toolNames: string[] = [];
+  let roundCount = 0;
+  let totalModelMs = 0;
+  let totalToolMs = 0;
+
+  const logTurnSummary = () => {
+    if (!IS_DEV_DIAGNOSTICS) {
+      return;
+    }
+    console.debug(
+      `[drawnix-agent] 本轮结束：${roundCount} 轮，模型 ${formatLogDuration(
+        totalModelMs
+      )}，工具 ${formatLogDuration(totalToolMs)}`
+    );
+  };
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+    roundCount = round + 1;
     onEvent?.({ type: 'round_start', round });
+    const roundStartedAt = nowMs();
     const data = await callChatCompletions(
       settings,
       apiMessages,
@@ -932,61 +957,79 @@ export const runChatTurn = async ({
       },
       signal
     );
+    const modelMs = nowMs() - roundStartedAt;
+    totalModelMs += modelMs;
     const assistant = data.choices?.[0]?.message;
     if (!assistant) {
       throw new Error(data.error?.message || '模型没有返回消息');
     }
 
     const toolCalls = assistant.tool_calls ?? [];
+    let roundToolMs = 0;
+    const roundToolLabels: string[] = [];
+
+    if (toolCalls.length > 0) {
+      apiMessages.push({
+        role: 'assistant',
+        content: assistant.content ?? null,
+        tool_calls: toolCalls,
+      });
+
+      for (const [index, toolCall] of toolCalls.entries()) {
+        const toolCallId = toolCall.id || `${round}-${index}`;
+        const toolName = toolCall.function.name;
+        const label = TOOL_LABELS[toolName] || toolName;
+        onEvent?.({ type: 'tool_start', toolCallId, toolName, label });
+        const startedAt = nowMs();
+        const result = executeToolCall(agent, toolCall);
+        const durationMs = Math.max(0, Math.round(nowMs() - startedAt));
+        roundToolMs += durationMs;
+        totalToolMs += durationMs;
+        roundToolLabels.push(label);
+        onEvent?.({
+          type: 'tool_end',
+          toolCallId,
+          toolName,
+          label,
+          ok: result.ok,
+          detail: describeToolResult(toolName, result),
+          durationMs,
+          elementIds:
+            result.ok && (toolName === 'add_elements' || toolName === 'update_elements')
+              ? getElementIds(result.result)
+              : undefined,
+        });
+        toolNames.push(label);
+        apiMessages.push({
+          role: 'tool',
+          tool_call_id: toolCallId,
+          name: toolName,
+          content: JSON.stringify(result),
+        });
+      }
+    }
+
+    if (IS_DEV_DIAGNOSTICS) {
+      const toolSummary = roundToolLabels.length
+        ? `，${roundToolLabels.length} 次：${roundToolLabels.join('、')}`
+        : '';
+      console.debug(
+        `[drawnix-agent] 第 ${round + 1} 轮：模型 ${formatLogDuration(
+          modelMs
+        )}，工具 ${formatLogDuration(roundToolMs)}${toolSummary}`
+      );
+    }
+
     if (toolCalls.length === 0) {
+      logTurnSummary();
       return {
         text: assistant.content?.trim() || (toolNames.length ? '已完成画布操作。' : ''),
         toolNames,
       };
     }
-
-    apiMessages.push({
-      role: 'assistant',
-      content: assistant.content ?? null,
-      tool_calls: toolCalls,
-    });
-
-    for (const [index, toolCall] of toolCalls.entries()) {
-      const toolCallId = toolCall.id || `${round}-${index}`;
-      const toolName = toolCall.function.name;
-      const label = TOOL_LABELS[toolName] || toolName;
-      onEvent?.({ type: 'tool_start', toolCallId, toolName, label });
-      const startedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
-      const result = executeToolCall(agent, toolCall);
-      const durationMs = Math.max(
-        0,
-        Math.round(
-          (typeof performance !== 'undefined' ? performance.now() : Date.now()) - startedAt
-        )
-      );
-      onEvent?.({
-        type: 'tool_end',
-        toolCallId,
-        toolName,
-        label,
-        ok: result.ok,
-        detail: describeToolResult(toolName, result),
-        durationMs,
-        elementIds:
-          result.ok && (toolName === 'add_elements' || toolName === 'update_elements')
-            ? getElementIds(result.result)
-            : undefined,
-      });
-      toolNames.push(label);
-      apiMessages.push({
-        role: 'tool',
-        tool_call_id: toolCallId,
-        name: toolName,
-        content: JSON.stringify(result),
-      });
-    }
   }
 
+  logTurnSummary();
   return {
     text: '工具调用次数已达到上限，请继续描述下一步操作。',
     toolNames,
