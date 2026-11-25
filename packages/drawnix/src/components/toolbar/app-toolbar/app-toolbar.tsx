@@ -12,7 +12,7 @@ import {
 } from '@plait/core';
 import { Island } from '../../island';
 import { Popover, PopoverContent, PopoverTrigger } from '../../popover/popover';
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import {
   CleanBoard,
   OpenFile,
@@ -26,7 +26,7 @@ import Menu from '../../menu/menu';
 import MenuSeparator from '../../menu/menu-separator';
 import { useI18n } from '../../../i18n';
 
-export const AppToolbar = () => {
+export const AppToolbar = ({ appMenuItems }: { appMenuItems?: ReactNode }) => {
   const board = useBoard();
   const { t } = useI18n();
   const container = PlaitBoard.getBoardContainer(board);
@@ -65,6 +65,7 @@ export const AppToolbar = () => {
                 setAppMenuOpen(false);
               }}
             >
+              {appMenuItems}
               <OpenFile></OpenFile>
               <SaveToFile></SaveToFile>
               <SaveAsFile></SaveAsFile>

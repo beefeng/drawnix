@@ -184,6 +184,10 @@ const viTranslations: Translations = {
   'tutorial.appToolbar': 'Xuất, cài đặt ngôn ngữ, ...',
   'tutorial.creationToolbar': 'Chọn một công cụ để bắt đầu sáng tạo',
   'tutorial.themeDescription': 'Chuyển đổi giữa chế độ sáng và tối',
+
+  'toast.saving': 'Đang lưu bảng…',
+  'toast.saved': 'Đã lưu bảng',
+  'toast.saveNotCompleted': 'Chưa lưu xong',
 };
 
 export default viTranslations;

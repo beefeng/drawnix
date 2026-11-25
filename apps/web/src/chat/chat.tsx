@@ -7,8 +7,14 @@ import {
   type KeyboardEvent,
   type PointerEvent,
 } from 'react';
-import { Drawnix, createDrawnixAgent, type DrawnixAgent } from '@drawnix/drawnix';
+import {
+  Drawnix,
+  createDrawnixAgent,
+  type DrawnixAgent,
+  type DrawnixFileSaveResult,
+} from '@drawnix/drawnix';
 import { useDrawnixBoardStore } from '../app/board-store';
+import { getBoardNameAfterFileSave, getDefaultFileSaveName } from '../app/board-storage';
 import {
   DEFAULT_LLM_SETTINGS,
   clearChatMessages,
@@ -85,12 +91,16 @@ type ConnectionTestState = {
 export function ChatApp() {
   const {
     loaded,
+    activeBoard,
+    activeBoardId,
     value,
     initialToolState,
     preference,
     updatePreference,
     handleChange,
     handleToolStateChange,
+    renameBoard,
+    markBoardFileSaved,
   } = useDrawnixBoardStore();
   const [settings, setSettings] = useState<LlmSettings>(() => loadLlmSettings());
   const [settingsOpen, setSettingsOpen] = useState(() => !loadLlmSettings().apiKey);
@@ -476,6 +486,17 @@ export function ChatApp() {
     return null;
   }
 
+  const handleFileSaved = (result: DrawnixFileSaveResult) => {
+    if (!result.fileName || !activeBoard) {
+      return;
+    }
+    const nextName = getBoardNameAfterFileSave(activeBoard.name, result.fileName, result.isNewFile);
+    if (nextName !== activeBoard.name) {
+      renameBoard(activeBoardId, nextName);
+    }
+    markBoardFileSaved(activeBoardId, result.fileName);
+  };
+
   return (
     <div
       className={`chat-page chat-theme--${themeMode} ${resizingPanel ? 'chat-page--resizing' : ''}`}
@@ -488,6 +509,9 @@ export function ChatApp() {
           theme={value.theme}
           initialToolState={initialToolState}
           initialLanguage={preference.language}
+          defaultFileName={
+            activeBoard ? getDefaultFileSaveName(activeBoard, preference.language) : undefined
+          }
           initialPreference={{
             copyTransparent: preference.copyTransparent,
             exportTransparent: preference.exportTransparent,
@@ -502,6 +526,7 @@ export function ChatApp() {
           onToolStateChange={handleToolStateChange}
           onThemeChange={(nextTheme) => setThemeMode(nextTheme as ChatThemeMode)}
           tutorial={false}
+          onFileSaved={handleFileSaved}
           agent
           afterInit={(board) => {
             agentRef.current = createDrawnixAgent(board);

@@ -1,15 +1,32 @@
-import { useEffect, useState } from 'react';
-import type { PlaitElement, PlaitTheme, Viewport } from '@plait/core';
-import type { DrawnixToolState } from '@drawnix/drawnix';
+import { useEffect, useRef, useState } from 'react';
 import localforage from 'localforage';
+import type { DrawnixToolState } from '@drawnix/drawnix';
+import {
+  LEGACY_MAIN_BOARD_CONTENT_KEY,
+  MAIN_BOARD_PREFERENCE_KEY,
+  MAIN_BOARD_TOOL_STATE_KEY,
+  createBoardId,
+  createBoardMeta,
+  createEmptyBoardValue,
+  createUntitledBoardName,
+  isBoardValueEmpty,
+  removeAllUntitledBoards,
+  loadBoardCollection,
+  loadBoardValue,
+  removeBoardValue,
+  saveActiveBoardId,
+  saveBoardValue,
+  saveBoardsIndex,
+  type BoardMeta,
+  type BoardStorage,
+  type BoardValue,
+  type Language,
+} from './board-storage';
 
-export type AppValue = {
-  children: PlaitElement[];
-  viewport?: Viewport;
-  theme?: PlaitTheme;
-};
+export type { Language } from './board-storage';
+export { MAIN_BOARD_TOOL_STATE_KEY, MAIN_BOARD_PREFERENCE_KEY };
 
-export type Language = 'zh' | 'en' | 'ru' | 'ar' | 'vi';
+export type AppValue = BoardValue;
 
 export type MainBoardPreference = {
   language: Language;
@@ -17,9 +34,15 @@ export type MainBoardPreference = {
   exportTransparent: boolean;
 };
 
-export const MAIN_BOARD_CONTENT_KEY = 'main_board_content';
-export const MAIN_BOARD_TOOL_STATE_KEY = 'main_board_tool_state';
-export const MAIN_BOARD_PREFERENCE_KEY = 'main_board_preference';
+export const MAIN_BOARD_CONTENT_KEY = LEGACY_MAIN_BOARD_CONTENT_KEY;
+
+const DEFAULT_PREFERENCE: MainBoardPreference = {
+  language: 'zh',
+  copyTransparent: false,
+  exportTransparent: false,
+};
+
+const BOARD_INDEX_SAVE_DELAY = 600;
 
 localforage.config({
   name: 'Drawnix',
@@ -27,65 +50,240 @@ localforage.config({
   driver: [localforage.INDEXEDDB, localforage.LOCALSTORAGE],
 });
 
-export const useDrawnixBoardStore = () => {
-  const [value, setValue] = useState<AppValue>({ children: [] });
+export const useDrawnixBoardStore = (storage: BoardStorage = localforage) => {
+  const [boards, setBoards] = useState<BoardMeta[]>([]);
+  const [activeBoardId, setActiveBoardId] = useState('');
+  const [value, setValue] = useState<AppValue>(createEmptyBoardValue());
   const [initialToolState, setInitialToolState] = useState<Partial<DrawnixToolState>>();
-  const [preference, setPreference] = useState<MainBoardPreference>({
-    language: 'zh',
-    copyTransparent: false,
-    exportTransparent: false,
-  });
+  const [preference, setPreference] = useState<MainBoardPreference>(DEFAULT_PREFERENCE);
   const [loaded, setLoaded] = useState(false);
   const [tutorial, setTutorial] = useState(false);
+
+  const boardsRef = useRef<BoardMeta[]>([]);
+  const activeBoardIdRef = useRef('');
+  const deletedBoardIdsRef = useRef(new Set<string>());
+  const switchRequestRef = useRef(0);
+  const mutationQueueRef = useRef<Promise<unknown>>(Promise.resolve());
+  const indexSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const runBoardMutation = <T>(operation: () => Promise<T>): Promise<T> => {
+    const result = mutationQueueRef.current.then(operation, operation);
+    mutationQueueRef.current = result.then(
+      () => undefined,
+      () => undefined
+    );
+    return result;
+  };
+
+  const persistBoardsIndex = (nextBoards: BoardMeta[], immediate = false) => {
+    boardsRef.current = nextBoards;
+    if (indexSaveTimeoutRef.current) {
+      clearTimeout(indexSaveTimeoutRef.current);
+      indexSaveTimeoutRef.current = null;
+    }
+    if (immediate) {
+      void saveBoardsIndex(storage, nextBoards);
+      return;
+    }
+    indexSaveTimeoutRef.current = setTimeout(() => {
+      indexSaveTimeoutRef.current = null;
+      void saveBoardsIndex(storage, boardsRef.current);
+    }, BOARD_INDEX_SAVE_DELAY);
+  };
+
+  const applyBoards = (nextBoards: BoardMeta[], immediate = false) => {
+    boardsRef.current = nextBoards;
+    setBoards(nextBoards);
+    persistBoardsIndex(nextBoards, immediate);
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadData = async () => {
+      const [storedToolState, storedPreference] = await Promise.all([
+        storage.getItem<Partial<DrawnixToolState>>(MAIN_BOARD_TOOL_STATE_KEY),
+        storage.getItem<MainBoardPreference>(MAIN_BOARD_PREFERENCE_KEY),
+      ]);
+      const nextPreference = storedPreference
+        ? { ...DEFAULT_PREFERENCE, ...storedPreference }
+        : DEFAULT_PREFERENCE;
+      const collection = await loadBoardCollection(storage, nextPreference.language);
+      if (cancelled) {
+        return;
+      }
+
+      activeBoardIdRef.current = collection.activeBoardId;
+      boardsRef.current = collection.boards;
+      setBoards(collection.boards);
+      setActiveBoardId(collection.activeBoardId);
+      setValue(collection.value);
+      setTutorial(isBoardValueEmpty(collection.value));
+      if (storedToolState) {
+        setInitialToolState(storedToolState);
+      }
+      setPreference(nextPreference);
+      setLoaded(true);
+    };
+
+    loadData();
+    return () => {
+      cancelled = true;
+    };
+  }, [storage]);
+
+  useEffect(() => {
+    return () => {
+      if (indexSaveTimeoutRef.current) {
+        clearTimeout(indexSaveTimeoutRef.current);
+      }
+    };
+  }, []);
 
   const updatePreference = (partialPreference: Partial<MainBoardPreference>) => {
     setPreference((currentPreference) => {
       const nextPreference = { ...currentPreference, ...partialPreference };
-      localforage.setItem(MAIN_BOARD_PREFERENCE_KEY, nextPreference);
+      storage.setItem(MAIN_BOARD_PREFERENCE_KEY, nextPreference);
       return nextPreference;
     });
   };
 
-  useEffect(() => {
-    const loadData = async () => {
-      const [storedData, storedToolState, storedPreference] = await Promise.all([
-        localforage.getItem(MAIN_BOARD_CONTENT_KEY),
-        localforage.getItem(MAIN_BOARD_TOOL_STATE_KEY),
-        localforage.getItem(MAIN_BOARD_PREFERENCE_KEY),
-      ]);
-      if (storedData) {
-        const appValue = storedData as AppValue;
-        setValue(appValue);
-        if (appValue.children && appValue.children.length === 0) {
-          setTutorial(true);
-        }
-      } else {
-        setTutorial(true);
-      }
-      if (storedToolState) {
-        setInitialToolState(storedToolState as Partial<DrawnixToolState>);
-      }
-      if (storedPreference) {
-        setPreference(storedPreference as MainBoardPreference);
-      }
-      setLoaded(true);
-    };
-    loadData();
-  }, []);
-
   const handleChange = (nextValue: AppValue) => {
-    localforage.setItem(MAIN_BOARD_CONTENT_KEY, nextValue);
     setValue(nextValue);
-    if (nextValue.children && nextValue.children.length > 0) {
+    const boardId = activeBoardId;
+    if (!boardId || deletedBoardIdsRef.current.has(boardId)) {
+      return;
+    }
+    void saveBoardValue(storage, boardId, nextValue);
+    if (!isBoardValueEmpty(nextValue)) {
       setTutorial(false);
     }
+    const now = Date.now();
+    applyBoards(
+      boardsRef.current.map((board) =>
+        board.id === boardId ? { ...board, updatedAt: now } : board
+      )
+    );
   };
 
   const handleToolStateChange = (toolState: DrawnixToolState) => {
-    localforage.setItem(MAIN_BOARD_TOOL_STATE_KEY, toolState);
+    storage.setItem(MAIN_BOARD_TOOL_STATE_KEY, toolState);
   };
 
+  const createBoard = () =>
+    runBoardMutation(async () => {
+      const id = createBoardId();
+      const now = Date.now();
+      const { boards: retainedBoards, removedIds } = removeAllUntitledBoards(boardsRef.current);
+      const meta = createBoardMeta(
+        id,
+        createUntitledBoardName(retainedBoards, preference.language),
+        now
+      );
+      const nextBoards = [meta, ...retainedBoards];
+      const nextValue = createEmptyBoardValue();
+      removedIds.forEach((boardId) => deletedBoardIdsRef.current.add(boardId));
+
+      await Promise.all([
+        saveBoardValue(storage, id, nextValue),
+        saveBoardsIndex(storage, nextBoards),
+        saveActiveBoardId(storage, id),
+        ...removedIds.map((boardId) => removeBoardValue(storage, boardId)),
+      ]);
+
+      switchRequestRef.current += 1;
+      activeBoardIdRef.current = id;
+      setActiveBoardId(id);
+      setValue(nextValue);
+      setTutorial(true);
+      applyBoards(nextBoards, true);
+      return id;
+    });
+
+  const switchBoard = async (boardId: string) => {
+    if (!boardId || boardId === activeBoardIdRef.current) {
+      return;
+    }
+    const requestId = switchRequestRef.current + 1;
+    switchRequestRef.current = requestId;
+    const nextValue = await loadBoardValue(storage, boardId);
+    if (requestId !== switchRequestRef.current) {
+      return;
+    }
+    activeBoardIdRef.current = boardId;
+    setActiveBoardId(boardId);
+    setValue(nextValue);
+    setTutorial(isBoardValueEmpty(nextValue));
+    await saveActiveBoardId(storage, boardId);
+  };
+
+  const renameBoard = (boardId: string, name: string) => {
+    const nextName = name.trim();
+    if (!nextName) {
+      return;
+    }
+    const nextBoards = boardsRef.current.map((board) =>
+      board.id === boardId ? { ...board, name: nextName, updatedAt: Date.now() } : board
+    );
+    applyBoards(nextBoards, true);
+  };
+
+  const markBoardFileSaved = (boardId: string, fileName: string) => {
+    const nextBoards = boardsRef.current.map((board) =>
+      board.id === boardId ? { ...board, fileName } : board
+    );
+    applyBoards(nextBoards, true);
+  };
+
+  const deleteBoard = (boardId: string) =>
+    runBoardMutation(async () => {
+      deletedBoardIdsRef.current.add(boardId);
+      switchRequestRef.current += 1;
+      const remainingBoards = boardsRef.current.filter((board) => board.id !== boardId);
+      await removeBoardValue(storage, boardId);
+
+      if (boardId !== activeBoardIdRef.current) {
+        applyBoards(remainingBoards, true);
+        return;
+      }
+
+      if (remainingBoards.length > 0) {
+        const nextBoard = remainingBoards[0];
+        const nextValue = await loadBoardValue(storage, nextBoard.id);
+        activeBoardIdRef.current = nextBoard.id;
+        setActiveBoardId(nextBoard.id);
+        setValue(nextValue);
+        setTutorial(isBoardValueEmpty(nextValue));
+        applyBoards(remainingBoards, true);
+        await saveActiveBoardId(storage, nextBoard.id);
+        return;
+      }
+
+      const id = createBoardId();
+      const meta = createBoardMeta(
+        id,
+        createUntitledBoardName([], preference.language),
+        Date.now()
+      );
+      const nextValue = createEmptyBoardValue();
+      await Promise.all([
+        saveBoardValue(storage, id, nextValue),
+        saveBoardsIndex(storage, [meta]),
+        saveActiveBoardId(storage, id),
+      ]);
+      activeBoardIdRef.current = id;
+      setActiveBoardId(id);
+      setValue(nextValue);
+      setTutorial(true);
+      applyBoards([meta], true);
+    });
+
+  const activeBoard = boards.find((board) => board.id === activeBoardId);
+
   return {
+    boards,
+    activeBoardId,
+    activeBoard,
     loaded,
     value,
     initialToolState,
@@ -95,5 +293,10 @@ export const useDrawnixBoardStore = () => {
     updatePreference,
     handleChange,
     handleToolStateChange,
+    createBoard,
+    switchBoard,
+    renameBoard,
+    markBoardFileSaved,
+    deleteBoard,
   };
 };

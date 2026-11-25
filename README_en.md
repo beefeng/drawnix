@@ -51,6 +51,7 @@
 - 🚀 Plugin-based Architecture - Extensible
 - 🖼️ 📃 Export to PNG, JPG, JSON(.drawnix)
 - 💾 Auto-save (Browser Storage)
+- 🗂️ Multiple canvases: create, switch, rename, delete
 - ⚡ Edit Features: Undo, Redo, Copy, Paste, etc.
 - 🌌 Infinite Canvas: Zoom, Pan
 - 🎨 Theme Support

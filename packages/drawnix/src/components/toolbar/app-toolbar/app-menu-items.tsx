@@ -1,7 +1,8 @@
 import { ExportImageIcon, GithubIcon, OpenFileIcon, SaveFileIcon, TrashIcon } from '../../icons';
 import { useBoard, useListRender } from '@plait-board/react-board';
 import { BoardTransforms, PlaitBoard, PlaitElement, PlaitTheme, Viewport } from '@plait/core';
-import { loadFromJSON, saveAsJSON, saveJSON } from '../../../data/json';
+import { loadFromJSON } from '../../../data/json';
+import type { DrawnixBoard } from '../../../hooks/use-drawnix';
 import MenuItem from '../../menu/menu-item';
 import MenuItemLink from '../../menu/menu-item-link';
 import { saveAsPng, saveAsSvg } from '../../../utils/image';
@@ -16,7 +17,7 @@ import { getShortcutKey } from '../../../utils/common';
 
 export const SaveToFile = () => {
   const board = useBoard();
-  const { appState, setAppState } = useDrawnix();
+  const { appState } = useDrawnix();
   const { t } = useI18n();
   if (!appState.fileHandle) {
     return null;
@@ -25,12 +26,7 @@ export const SaveToFile = () => {
     <MenuItem
       data-testid="save-button"
       onSelect={() => {
-        saveJSON(board, appState.fileHandle).then(({ fileHandle }) => {
-          setAppState((currentAppState) => ({
-            ...currentAppState,
-            fileHandle,
-          }));
-        });
+        void (board as DrawnixBoard).saveFile?.();
       }}
       icon={SaveFileIcon}
       aria-label={t('menu.saveFile')}
@@ -44,18 +40,12 @@ SaveToFile.displayName = 'SaveToFile';
 
 export const SaveAsFile = () => {
   const board = useBoard();
-  const { setAppState } = useDrawnix();
   const { t } = useI18n();
   return (
     <MenuItem
       data-testid="save-as-button"
       onSelect={() => {
-        saveAsJSON(board).then(({ fileHandle }) => {
-          setAppState((currentAppState) => ({
-            ...currentAppState,
-            fileHandle,
-          }));
-        });
+        void (board as DrawnixBoard).saveFile?.({ saveAs: true });
       }}
       icon={SaveFileIcon}
       aria-label={t('menu.saveAsFile')}

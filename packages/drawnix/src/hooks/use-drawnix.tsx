@@ -60,7 +60,20 @@ export const mergeToolState = (toolState?: Partial<DrawnixToolState>): DrawnixTo
 export interface DrawnixBoard extends PlaitBoard {
   appState: DrawnixState;
   showToast?: (toast: DrawnixToastOptions) => void;
+  saveFile?: (options?: DrawnixFileSaveOptions) => Promise<DrawnixFileSaveResult | null>;
+  isFileDirty?: () => boolean;
 }
+
+export type DrawnixFileSaveOptions = {
+  saveAs?: boolean;
+  fileName?: string;
+};
+
+export type DrawnixFileSaveResult = {
+  fileHandle: DrawnixFileHandle;
+  fileName?: string;
+  isNewFile: boolean;
+};
 
 export type LinkState = {
   targetDom: HTMLElement;
@@ -76,6 +89,7 @@ export type DrawnixState = {
   isMobile: boolean;
   isPencilMode: boolean;
   fileHandle: DrawnixFileHandle;
+  defaultFileName: string;
   openDialogType: DialogType | null;
   openCleanConfirm: boolean;
   copyTransparent: boolean;

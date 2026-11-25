@@ -1,0 +1,356 @@
+.canvas-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  background: rgba(17, 23, 34, 0.24);
+  backdrop-filter: blur(2px);
+  animation: canvas-overlay-in 0.16s ease-out;
+}
+
+.canvas-panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 344px;
+  max-width: calc(100vw - 28px);
+  height: 100%;
+  overflow: hidden;
+  background: #fbfbfd;
+  border-right: 1px solid #e7e8ee;
+  box-shadow: 24px 0 64px rgba(18, 27, 45, 0.16);
+  animation: canvas-panel-in 0.2s cubic-bezier(0.22, 0.7, 0.32, 1);
+}
+
+.canvas-panel__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 26px 22px 18px;
+}
+
+.canvas-panel__eyebrow,
+.canvas-confirm__eyebrow {
+  display: block;
+  margin-bottom: 6px;
+  color: #7d8bab;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+}
+
+.canvas-panel__head h2 {
+  margin: 0;
+  color: #1c2330;
+  font-size: 20px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.canvas-panel__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  color: #7b8498;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.canvas-panel__close:hover {
+  color: #293143;
+  background: #f0f2f7;
+  border-color: #e6e8ef;
+}
+
+.canvas-panel__list {
+  flex: 1;
+  padding: 2px 12px 16px;
+  overflow-y: auto;
+}
+
+.canvas-item {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  margin-bottom: 4px;
+  padding: 3px;
+  border: 1px solid transparent;
+  border-radius: 11px;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.canvas-item:hover {
+  background: #f3f5f9;
+}
+
+.canvas-item--active {
+  background: #eef4ff;
+  border-color: #dbe6ff;
+}
+
+.canvas-item--active:hover {
+  background: #eaf1ff;
+}
+
+.canvas-item__select {
+  flex: 1;
+  min-width: 0;
+  padding: 9px 10px;
+  color: inherit;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.canvas-item__name {
+  display: block;
+  overflow: hidden;
+  color: #252d3c;
+  font-size: 14px;
+  font-weight: 550;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.canvas-item--active .canvas-item__name {
+  color: #2456cf;
+}
+
+.canvas-item__meta {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 3px;
+  color: #8b93a6;
+  font-size: 11.5px;
+}
+
+.canvas-item__current {
+  padding: 1px 6px;
+  color: #3d68d8;
+  font-size: 10.5px;
+  font-weight: 600;
+  background: rgba(63, 110, 232, 0.1);
+  border-radius: 999px;
+}
+
+.canvas-item__input {
+  flex: 1;
+  min-width: 0;
+  margin: 4px;
+  padding: 7px 9px;
+  color: #1f2736;
+  font: inherit;
+  font-size: 14px;
+  background: #ffffff;
+  border: 1px solid #9bb4f4;
+  border-radius: 8px;
+  outline: 3px solid rgba(102, 152, 255, 0.16);
+}
+
+.canvas-item__actions {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  padding-right: 2px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.canvas-item:hover .canvas-item__actions,
+.canvas-item:focus-within .canvas-item__actions {
+  opacity: 1;
+}
+
+.canvas-item__action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: #778095;
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.canvas-item__action:hover {
+  color: #263043;
+  background: rgba(255, 255, 255, 0.85);
+}
+
+.canvas-item__action--danger:hover {
+  color: #c63d4b;
+  background: #fff0f1;
+}
+
+.canvas-panel__foot {
+  padding: 14px 20px calc(18px + env(safe-area-inset-bottom));
+  background: linear-gradient(180deg, rgba(251, 251, 253, 0), #fbfbfd 18%);
+  border-top: 1px solid #eef0f5;
+}
+
+.canvas-panel__create {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  width: 100%;
+  height: 42px;
+  color: #ffffff;
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 600;
+  background: #2f5edb;
+  border: 0;
+  border-radius: 10px;
+  box-shadow: 0 8px 18px rgba(47, 94, 219, 0.22);
+  cursor: pointer;
+  transition:
+    background-color 0.16s ease,
+    transform 0.16s ease;
+}
+
+.canvas-panel__create:hover:not(:disabled) {
+  background: #2652c9;
+  transform: translateY(-1px);
+}
+
+.canvas-panel__create:disabled {
+  cursor: wait;
+  opacity: 0.68;
+}
+
+.canvas-panel__hint {
+  margin: 9px 0 0;
+  color: #9aa1b1;
+  font-size: 11px;
+  text-align: center;
+}
+
+.canvas-confirm {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(23, 30, 44, 0.28);
+  backdrop-filter: blur(2px);
+  animation: canvas-overlay-in 0.14s ease-out;
+}
+
+.canvas-confirm__card {
+  width: 100%;
+  max-width: 300px;
+  padding: 20px;
+  background: #ffffff;
+  border: 1px solid #e8eaf0;
+  border-radius: 14px;
+  box-shadow: 0 20px 50px rgba(18, 27, 45, 0.24);
+}
+
+.canvas-confirm__card h3 {
+  margin: 0;
+  color: #1d2432;
+  font-size: 17px;
+  font-weight: 650;
+}
+
+.canvas-confirm__card p {
+  margin: 8px 0 18px;
+  color: #697188;
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+.canvas-confirm__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.canvas-confirm__button {
+  height: 34px;
+  padding: 0 14px;
+  color: #4a5264;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  background: #f4f5f8;
+  border: 1px solid #e5e7ee;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.canvas-confirm__button:hover {
+  background: #eceef3;
+}
+
+.canvas-confirm__button--danger {
+  color: #ffffff;
+  background: #d44755;
+  border-color: #d44755;
+}
+
+.canvas-confirm__button--danger:hover {
+  background: #bf3846;
+}
+
+@keyframes canvas-overlay-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes canvas-panel-in {
+  from {
+    opacity: 0;
+    transform: translateX(-18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@media (hover: none) {
+  .canvas-item__actions {
+    opacity: 1;
+  }
+}
+
+@media (max-width: 640px) {
+  .canvas-panel {
+    width: 100%;
+    max-width: none;
+    border-right: 0;
+  }
+
+  .canvas-panel__head {
+    padding-top: calc(20px + env(safe-area-inset-top));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .canvas-overlay,
+  .canvas-panel,
+  .canvas-confirm {
+    animation: none;
+  }
+}

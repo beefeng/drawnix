@@ -184,6 +184,10 @@ const arTranslations: Translations = {
   'tutorial.appToolbar': 'تصدير، إعدادات اللغة، ...',
   'tutorial.creationToolbar': 'اختر أداة لبدء الإنشاء',
   'tutorial.themeDescription': 'التبديل بين السمة الفاتحة والداكنة',
+
+  'toast.saving': 'جارٍ حفظ اللوحة…',
+  'toast.saved': 'تم حفظ اللوحة',
+  'toast.saveNotCompleted': 'لم يكتمل الحفظ',
 };
 
 export default arTranslations;

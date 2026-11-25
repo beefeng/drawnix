@@ -182,6 +182,10 @@ const enTranslations: Translations = {
   'tutorial.appToolbar': 'Export, language settings, ...',
   'tutorial.creationToolbar': 'Select a tool to start your creation',
   'tutorial.themeDescription': 'Switch between light and dark themes',
+
+  'toast.saving': 'Saving canvas…',
+  'toast.saved': 'Canvas saved',
+  'toast.saveNotCompleted': 'Save not completed',
 };
 
 export default enTranslations;
