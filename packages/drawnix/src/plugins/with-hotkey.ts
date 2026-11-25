@@ -1,7 +1,6 @@
 import { BoardTransforms, getSelectedElements, PlaitBoard, PlaitPointerType } from '@plait/core';
 import { isHotkey } from 'is-hotkey';
 import { addImage, canCopySelectionAs, copySelectionAsSvg, saveAsSvg } from '../utils/image';
-import { saveAsJSON, saveJSON } from '../data/json';
 import {
   DrawnixBoard,
   DrawnixFreehandPointer,
@@ -45,16 +44,12 @@ export const buildDrawnixHotkeyPlugin = (
           return;
         }
         if (isHotkey(['mod+shift+s'], { byKey: true })(event)) {
-          saveAsJSON(board).then(({ fileHandle }) => {
-            updateAppState({ fileHandle });
-          });
+          void (board as DrawnixBoard).saveFile?.({ saveAs: true });
           event.preventDefault();
           return;
         }
         if (isHotkey(['mod+s'], { byKey: true })(event)) {
-          saveJSON(board, (board as DrawnixBoard).appState.fileHandle).then(({ fileHandle }) => {
-            updateAppState({ fileHandle });
-          });
+          void (board as DrawnixBoard).saveFile?.();
           event.preventDefault();
           return;
         }

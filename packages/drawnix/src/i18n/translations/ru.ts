@@ -185,6 +185,10 @@ const ruTranslations: Translations = {
   'tutorial.appToolbar': 'Экспорт, настройки языка, ...',
   'tutorial.creationToolbar': 'Выберите инструмент, чтобы начать творить',
   'tutorial.themeDescription': 'Переключение между светлой и тёмной темами',
+
+  'toast.saving': 'Сохранение доски…',
+  'toast.saved': 'Доска сохранена',
+  'toast.saveNotCompleted': 'Сохранение не завершено',
 };
 
 export default ruTranslations;

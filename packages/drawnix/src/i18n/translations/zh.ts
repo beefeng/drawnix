@@ -183,6 +183,10 @@ const zhTranslations: Translations = {
   'tutorial.appToolbar': '导出，语言设置，...',
   'tutorial.creationToolbar': '选择一个工具开始你的创作',
   'tutorial.themeDescription': '在明亮和黑暗主题之间切换',
+
+  'toast.saving': '正在保存画布…',
+  'toast.saved': '画布已保存',
+  'toast.saveNotCompleted': '保存未完成',
 };
 
 export default zhTranslations;

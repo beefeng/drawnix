@@ -1,13 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
 import classNames from 'classnames';
 import type { BoardMeta } from './board-storage';
+import { CloseIcon, PencilIcon, PlusIcon, TrashIcon } from './canvas-icons';
 import './canvas-manager.scss';
 
 type CanvasManagerProps = {
+  open: boolean;
+  onClose: () => void;
   boards: BoardMeta[];
   activeBoardId: string;
-  activeBoard?: BoardMeta;
-  onCreate: () => Promise<string>;
+  onCreate: () => void | Promise<unknown>;
   onSelect: (boardId: string) => Promise<void>;
   onRename: (boardId: string, name: string) => void;
   onDelete: (boardId: string) => Promise<void>;
@@ -27,111 +29,22 @@ const formatBoardTime = (timestamp: number) => {
   return new Date(timestamp).toLocaleDateString('zh-CN');
 };
 
-const LayersIcon = () => (
-  <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true">
-    <path
-      d="M10 2.6 2.8 6.3 10 10l7.2-3.7L10 2.6Z"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.5"
-      strokeLinejoin="round"
-    />
-    <path
-      d="m3.4 10 6.6 3.4 6.6-3.4M3.4 13.7 10 17.1l6.6-3.4"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.5"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    />
-  </svg>
-);
-
-const ChevronIcon = () => (
-  <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-    <path
-      d="m4 6 4 4 4-4"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.6"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    />
-  </svg>
-);
-
-const CloseIcon = () => (
-  <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
-    <path
-      d="m4 4 8 8m0-8-8 8"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.6"
-      strokeLinecap="round"
-    />
-  </svg>
-);
-
-const PencilIcon = () => (
-  <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-    <path
-      d="M9.8 3.2 12.8 6.2 5.6 13.4l-3.4.8.8-3.4 6.8-7.6Z"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.4"
-      strokeLinejoin="round"
-    />
-    <path d="m8.6 4.4 3 3" fill="none" stroke="currentColor" strokeWidth="1.4" />
-  </svg>
-);
-
-const TrashIcon = () => (
-  <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-    <path
-      d="M3.6 4.8h8.8M6.4 4.8V3.2h3.2v1.6M4.8 4.8l.5 8h5.4l.5-8M6.8 7v3.6M9.2 7v3.6"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.4"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    />
-  </svg>
-);
-
-const PlusIcon = () => (
-  <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
-    <path
-      d="M8 3.2v9.6M3.2 8h9.6"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.7"
-      strokeLinecap="round"
-    />
-  </svg>
-);
-
 export const CanvasManager = ({
+  open,
+  onClose,
   boards,
   activeBoardId,
-  activeBoard,
   onCreate,
   onSelect,
   onRename,
   onDelete,
 }: CanvasManagerProps) => {
-  const [open, setOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [draftName, setDraftName] = useState('');
   const [deleteTarget, setDeleteTarget] = useState<BoardMeta | null>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
   const cancelRenameRef = useRef(false);
-  const [isMobileLayout] = useState(() => {
-    return (
-      typeof window !== 'undefined' &&
-      /Android|iPhone|iPad|iPod|Mobile/i.test(window.navigator.userAgent)
-    );
-  });
 
   useEffect(() => {
     if (!open) {
@@ -152,11 +65,11 @@ export const CanvasManager = ({
         setRenamingId(null);
         return;
       }
-      setOpen(false);
+      onClose();
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [open, renamingId, deleteTarget]);
+  }, [open, renamingId, deleteTarget, onClose]);
 
   useEffect(() => {
     if (renamingId) {
@@ -191,7 +104,7 @@ export const CanvasManager = ({
     setCreating(true);
     try {
       await onCreate();
-      setOpen(false);
+      onClose();
     } finally {
       setCreating(false);
     }
@@ -208,35 +121,12 @@ export const CanvasManager = ({
 
   return (
     <>
-      <button
-        type="button"
-        className={classNames('canvas-trigger', {
-          'canvas-trigger--mobile': isMobileLayout,
-        })}
-        aria-haspopup="dialog"
-        aria-expanded={open}
-        aria-label="打开画布列表"
-        aria-describedby="canvas-trigger-label"
-        onClick={() => setOpen(true)}
-      >
-        <span className="canvas-trigger__icon">
-          <LayersIcon />
-        </span>
-        <span id="canvas-trigger-label" className="canvas-trigger__label">
-          {activeBoard?.name ?? '画布'}
-        </span>
-        <span className="canvas-trigger__count">{boards.length}</span>
-        <span className="canvas-trigger__chevron">
-          <ChevronIcon />
-        </span>
-      </button>
-
       {open && (
         <div
           className="canvas-overlay"
           onMouseDown={(event) => {
             if (event.target === event.currentTarget) {
-              setOpen(false);
+              onClose();
             }
           }}
         >
@@ -255,7 +145,7 @@ export const CanvasManager = ({
                 type="button"
                 className="canvas-panel__close"
                 aria-label="关闭画布列表"
-                onClick={() => setOpen(false)}
+                onClick={onClose}
               >
                 <CloseIcon />
               </button>
@@ -298,7 +188,7 @@ export const CanvasManager = ({
                         className="canvas-item__select"
                         aria-current={isActive ? 'true' : undefined}
                         onClick={() => {
-                          setOpen(false);
+                          onClose();
                           void onSelect(board.id);
                         }}
                       >

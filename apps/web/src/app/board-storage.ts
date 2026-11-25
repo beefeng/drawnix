@@ -11,6 +11,7 @@ export type BoardValue = {
 export type BoardMeta = {
   id: string;
   name: string;
+  fileName?: string;
   createdAt: number;
   updatedAt: number;
 };
@@ -50,6 +51,14 @@ const MIGRATED_BOARD_NAMES: Record<Language, string> = {
   ru: 'Моя доска',
   ar: 'لوحتي',
   vi: 'Bảng của tôi',
+};
+
+const BOARD_FILE_NAME_PREFIXES: Record<Language, string> = {
+  zh: '画布',
+  en: 'Canvas',
+  ru: 'Доска',
+  ar: 'لوحة',
+  vi: 'Bảng',
 };
 
 export const boardValueKey = (boardId: string) => `${BOARD_KEY_PREFIX}${boardId}`;
@@ -94,6 +103,7 @@ const normalizeBoards = (value: unknown): BoardMeta[] => {
           typeof item.name === 'string' && item.name.trim().length > 0
             ? item.name.trim()
             : UNTITLED_BOARD_NAMES.zh,
+        fileName: typeof item.fileName === 'string' ? item.fileName : undefined,
         createdAt: typeof item.createdAt === 'number' ? item.createdAt : now,
         updatedAt: typeof item.updatedAt === 'number' ? item.updatedAt : now,
       };
@@ -111,6 +121,76 @@ export const createUntitledBoardName = (boards: BoardMeta[], language: Language 
     suffix += 1;
   }
   return `${baseName} ${suffix}`;
+};
+
+export const isUntitledBoardName = (name: string) => {
+  return Object.values(UNTITLED_BOARD_NAMES).some((baseName) => {
+    if (name === baseName) {
+      return true;
+    }
+    return name.startsWith(`${baseName} `) && /^\d+$/.test(name.slice(baseName.length + 1));
+  });
+};
+
+export const getBoardNameAfterFileSave = (
+  currentName: string,
+  fileName: string | undefined,
+  isNewFile: boolean
+) => {
+  if (!isNewFile || !fileName) {
+    return currentName;
+  }
+  return isUntitledBoardName(currentName) ? fileName : currentName;
+};
+
+export const getDefaultFileSaveName = (board: BoardMeta, language: Language = 'zh') => {
+  if (!isUntitledBoardName(board.name)) {
+    return board.name;
+  }
+  const date = new Date(board.createdAt || Date.now());
+  const pad = (value: number) => String(value).padStart(2, '0');
+  const timestamp = [
+    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`,
+    `${pad(date.getHours())}-${pad(date.getMinutes())}`,
+  ].join(' ');
+  return `${BOARD_FILE_NAME_PREFIXES[language] ?? BOARD_FILE_NAME_PREFIXES.zh} ${timestamp}`;
+};
+
+export const removeOlderUntitledBoards = (boards: BoardMeta[]) => {
+  let latestUntitled: BoardMeta | undefined;
+  boards.forEach((board) => {
+    if (
+      isUntitledBoardName(board.name) &&
+      (!latestUntitled || board.createdAt > latestUntitled.createdAt)
+    ) {
+      latestUntitled = board;
+    }
+  });
+
+  if (!latestUntitled) {
+    return { boards, removedIds: [] as string[], latestUntitledId: undefined };
+  }
+
+  const removedIds = boards
+    .filter((board) => isUntitledBoardName(board.name) && board.id !== latestUntitled?.id)
+    .map((board) => board.id);
+  const removedIdSet = new Set(removedIds);
+  return {
+    boards: boards.filter((board) => !removedIdSet.has(board.id)),
+    removedIds,
+    latestUntitledId: latestUntitled.id,
+  };
+};
+
+export const removeAllUntitledBoards = (boards: BoardMeta[]) => {
+  const removedIds = boards
+    .filter((board) => isUntitledBoardName(board.name))
+    .map((board) => board.id);
+  const removedIdSet = new Set(removedIds);
+  return {
+    boards: boards.filter((board) => !removedIdSet.has(board.id)),
+    removedIds,
+  };
 };
 
 export const createBoardMeta = (id: string, name: string, timestamp = Date.now()): BoardMeta => ({
@@ -159,12 +239,21 @@ export const loadBoardCollection = async (
     storage.getItem<BoardValue>(LEGACY_MAIN_BOARD_CONTENT_KEY),
   ]);
 
-  const boards = normalizeBoards(storedBoards);
+  const normalizedBoards = normalizeBoards(storedBoards);
+  const { boards, removedIds, latestUntitledId } = removeOlderUntitledBoards(normalizedBoards);
+  if (removedIds.length > 0) {
+    await Promise.all([
+      saveBoardsIndex(storage, boards),
+      ...removedIds.map((boardId) => removeBoardValue(storage, boardId)),
+    ]);
+  }
   if (boards.length > 0) {
     const activeBoardId =
       storedActiveBoardId && boards.some((board) => board.id === storedActiveBoardId)
         ? storedActiveBoardId
-        : boards[0].id;
+        : removedIds.length > 0 && latestUntitledId
+          ? latestUntitledId
+          : boards[0].id;
     const value = await loadBoardValue(storage, activeBoardId);
     if (activeBoardId !== storedActiveBoardId) {
       await saveActiveBoardId(storage, activeBoardId);

@@ -5,6 +5,7 @@ import {
   PlaitElement,
   PlaitPlugin,
   PlaitPointerType,
+  PlaitOperation,
   PlaitTheme,
   BoardTransforms,
   Selection,
@@ -32,6 +33,8 @@ import { buildPencilPlugin } from './plugins/with-pencil';
 import {
   DrawnixBoard,
   DrawnixContext,
+  DrawnixFileSaveOptions,
+  DrawnixFileSaveResult,
   DrawnixToolState,
   mergeToolState,
   type DrawnixState,
@@ -41,13 +44,14 @@ import { TTDDialog } from './components/ttd-dialog/ttd-dialog';
 import { CleanConfirm } from './components/clean-confirm/clean-confirm';
 import { buildTextLinkPlugin } from './plugins/with-text-link';
 import { LinkPopup } from './components/popup/link-popup/link-popup';
-import { I18nProvider, setBoardLanguage } from './i18n';
+import { I18nProvider, i18nInsidePlaitHook, setBoardLanguage } from './i18n';
 import type { Language } from './i18n/types';
 import { Tutorial } from './components/tutorial';
 import { LASER_POINTER_CLASS_NAME } from './utils/laser-pointer';
 import { Toast, useToast } from './components/toast/toast';
 import type { DrawnixAgentOptions } from './agent/types';
 import { installDrawnixAgent } from './agent/drawnix-agent';
+import { saveAsJSON, saveJSON, serializeAsJSON, type DrawnixFileHandle } from './data/json';
 
 export type DrawnixProps = {
   value: PlaitElement[];
@@ -59,6 +63,7 @@ export type DrawnixProps = {
     exportTransparent?: boolean;
   };
   initialLanguage?: Language;
+  defaultFileName?: string;
   onChange?: (value: BoardChangeData) => void;
   onSelectionChange?: (selection: Selection | null) => void;
   onValueChange?: (value: PlaitElement[]) => void;
@@ -70,6 +75,11 @@ export type DrawnixProps = {
     exportTransparent: boolean;
   }) => void;
   onLanguageChange?: (language: Language) => void;
+  onFileSaved?: (result: DrawnixFileSaveResult) => void;
+  /**
+   * Extra items rendered at the top of the application menu.
+   */
+  appMenuItems?: React.ReactNode;
   afterInit?: (board: PlaitBoard) => void;
   /**
    * Expose the board operation API for automation agents.
@@ -80,7 +90,12 @@ export type DrawnixProps = {
   tutorial?: boolean;
 } & React.HTMLAttributes<HTMLDivElement>;
 
-export type { DrawnixToolState } from './hooks/use-drawnix';
+export type {
+  DrawnixBoard,
+  DrawnixFileSaveOptions,
+  DrawnixFileSaveResult,
+  DrawnixToolState,
+} from './hooks/use-drawnix';
 
 const applyToolStateToBoard = (board: PlaitBoard, toolState: DrawnixToolState) => {
   BoardTransforms.updatePointerType(board, toolState.pointer);
@@ -99,6 +114,7 @@ export const Drawnix: React.FC<DrawnixProps> = ({
   initialToolState,
   initialPreference,
   initialLanguage,
+  defaultFileName,
   onChange,
   onSelectionChange,
   onViewportChange,
@@ -107,6 +123,8 @@ export const Drawnix: React.FC<DrawnixProps> = ({
   onToolStateChange,
   onPreferenceChange,
   onLanguageChange,
+  onFileSaved,
+  appMenuItems,
   afterInit,
   agent = false,
   tutorial = false,
@@ -125,6 +143,7 @@ export const Drawnix: React.FC<DrawnixProps> = ({
       isMobile: md.mobile() !== null,
       isPencilMode: false,
       fileHandle: null,
+      defaultFileName: defaultFileName ?? '未命名画布',
       openDialogType: null,
       openCleanConfirm: false,
       copyTransparent: initialPreference?.copyTransparent ?? false,
@@ -138,6 +157,59 @@ export const Drawnix: React.FC<DrawnixProps> = ({
   );
   const { toast, showToast } = useToast();
   const lastKnownLanguageRef = useRef<Language>(initialLanguage ?? 'zh');
+  const fileDirtyRef = useRef(false);
+  const saveFileRef = useRef<
+    ((options?: DrawnixFileSaveOptions) => Promise<DrawnixFileSaveResult | null>) | null
+  >(null);
+  const serializedCacheRef = useRef<{
+    revision: number;
+    json: string;
+    children: PlaitElement[];
+  } | null>(null);
+  const documentRevisionRef = useRef(0);
+  const snapshotTimeoutRef = useRef<number | null>(null);
+  const snapshotIdleRef = useRef<number | null>(null);
+
+  const cancelScheduledSnapshot = () => {
+    if (snapshotTimeoutRef.current !== null) {
+      window.clearTimeout(snapshotTimeoutRef.current);
+      snapshotTimeoutRef.current = null;
+    }
+    if (snapshotIdleRef.current !== null && 'cancelIdleCallback' in window) {
+      window.cancelIdleCallback(snapshotIdleRef.current);
+      snapshotIdleRef.current = null;
+    }
+  };
+
+  const buildSerializedSnapshot = () => {
+    if (!board) {
+      return;
+    }
+    const revision = documentRevisionRef.current;
+    const json = serializeAsJSON(board);
+    if (revision !== documentRevisionRef.current) {
+      return;
+    }
+    serializedCacheRef.current = { revision, json, children: board.children };
+  };
+
+  const scheduleSerializedSnapshot = () => {
+    cancelScheduledSnapshot();
+    snapshotTimeoutRef.current = window.setTimeout(() => {
+      snapshotTimeoutRef.current = null;
+      if ('requestIdleCallback' in window) {
+        snapshotIdleRef.current = window.requestIdleCallback(
+          () => {
+            snapshotIdleRef.current = null;
+            buildSerializedSnapshot();
+          },
+          { timeout: 2500 }
+        );
+      } else {
+        buildSerializedSnapshot();
+      }
+    }, 600);
+  };
 
   if (board) {
     board.appState = appState;
@@ -184,6 +256,34 @@ export const Drawnix: React.FC<DrawnixProps> = ({
     }
   }, [theme?.themeColorMode]);
 
+  useEffect(() => {
+    if (!defaultFileName) {
+      return;
+    }
+    setAppState((currentAppState) => {
+      if (currentAppState.defaultFileName === defaultFileName) {
+        return currentAppState;
+      }
+      return { ...currentAppState, defaultFileName };
+    });
+  }, [defaultFileName]);
+
+  useEffect(() => {
+    if (!board) {
+      return;
+    }
+    board.saveFile = (options) => saveFileRef.current?.(options) ?? Promise.resolve(null);
+    board.isFileDirty = () => fileDirtyRef.current;
+    scheduleSerializedSnapshot();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [board]);
+
+  useEffect(() => {
+    return () => {
+      cancelScheduledSnapshot();
+    };
+  }, []);
+
   const agentEnabled = Boolean(agent);
   const agentGlobalName = typeof agent === 'object' ? agent.globalName : undefined;
   const agentTarget = typeof agent === 'object' ? agent.target : undefined;
@@ -207,6 +307,68 @@ export const Drawnix: React.FC<DrawnixProps> = ({
       ...newAppState,
     }));
   };
+
+  const getFileNameFromHandle = (fileHandle: DrawnixFileHandle) => {
+    if (!fileHandle || !('name' in fileHandle)) {
+      return undefined;
+    }
+    const name = fileHandle.name.replace(/\.drawnix$/i, '').trim();
+    return name || undefined;
+  };
+
+  const saveFile = async (options: DrawnixFileSaveOptions = {}) => {
+    if (!board) {
+      return null;
+    }
+    const currentAppState = board.appState;
+    const shouldSaveAs = Boolean(options.saveAs) || !currentAppState.fileHandle;
+    const requestedName =
+      options.fileName?.trim() || currentAppState.defaultFileName || '未命名画布';
+    const { t } = i18nInsidePlaitHook(board);
+    const revision = documentRevisionRef.current;
+    const saveChildren = board.children;
+    const cachedSnapshot = serializedCacheRef.current;
+    const cachedJson =
+      cachedSnapshot &&
+      cachedSnapshot.revision === revision &&
+      cachedSnapshot.children === saveChildren
+        ? cachedSnapshot.json
+        : undefined;
+
+    try {
+      board.showToast?.({ type: 'info', message: t('toast.saving'), duration: 0 });
+      const result = shouldSaveAs
+        ? await saveAsJSON(board, requestedName, cachedJson)
+        : await saveJSON(board, currentAppState.fileHandle, requestedName, cachedJson);
+      const fileHandle = result.fileHandle ?? null;
+      const fileName = getFileNameFromHandle(fileHandle) ?? requestedName;
+      if (result.serialized) {
+        serializedCacheRef.current = {
+          revision,
+          json: result.serialized,
+          children: saveChildren,
+        };
+      }
+      setAppState((currentState) => ({
+        ...currentState,
+        fileHandle,
+        defaultFileName: fileName,
+      }));
+      fileDirtyRef.current = false;
+      const saveResult: DrawnixFileSaveResult = {
+        fileHandle,
+        fileName,
+        isNewFile: shouldSaveAs,
+      };
+      onFileSaved?.(saveResult);
+      board.showToast?.({ type: 'success', message: t('toast.saved') });
+      return saveResult;
+    } catch {
+      board.showToast?.({ type: 'info', message: t('toast.saveNotCompleted') });
+      return null;
+    }
+  };
+  saveFileRef.current = saveFile;
 
   const syncBoardPointerToToolState = (pointer: DrawnixToolState['pointer']) => {
     setAppState((currentAppState) => {
@@ -264,6 +426,21 @@ export const Drawnix: React.FC<DrawnixProps> = ({
             options={options}
             plugins={plugins}
             onChange={(data: BoardChangeData) => {
+              const hasPersistedChange = data.operations.some(
+                (operation) => !PlaitOperation.isSetSelectionOperation(operation)
+              );
+              if (hasPersistedChange) {
+                documentRevisionRef.current += 1;
+                scheduleSerializedSnapshot();
+              }
+              const hasDocumentChange = data.operations.some(
+                (operation) =>
+                  !PlaitOperation.isSetSelectionOperation(operation) &&
+                  !PlaitOperation.isSetViewportOperation(operation)
+              );
+              if (hasDocumentChange) {
+                fileDirtyRef.current = true;
+              }
               onChange?.(data);
             }}
             onSelectionChange={onSelectionChange}
@@ -284,7 +461,7 @@ export const Drawnix: React.FC<DrawnixProps> = ({
             >
               {tutorial && board && <Tutorial />}
             </Board>
-            <AppToolbar></AppToolbar>
+            <AppToolbar appMenuItems={appMenuItems}></AppToolbar>
             <CreationToolbar></CreationToolbar>
             <ZoomToolbar></ZoomToolbar>
             <ThemeToolbar></ThemeToolbar>

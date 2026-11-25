@@ -16,9 +16,10 @@ const boards: BoardMeta[] = [
 
 const renderManager = (overrides: Partial<ComponentProps<typeof CanvasManager>> = {}) => {
   const props = {
+    open: true,
+    onClose: vi.fn(),
     boards,
     activeBoardId: 'one',
-    activeBoard: boards[0],
     onCreate: vi.fn(async () => 'new-board'),
     onSelect: vi.fn(async () => undefined),
     onRename: vi.fn(),
@@ -29,14 +30,9 @@ const renderManager = (overrides: Partial<ComponentProps<typeof CanvasManager>> 
   return props;
 };
 
-const openPanel = () => {
-  fireEvent.click(screen.getByRole('button', { name: '打开画布列表' }));
-};
-
 describe('CanvasManager', () => {
-  it('opens the board list and creates a board', async () => {
+  it('renders the board list and creates a board', async () => {
     const props = renderManager();
-    openPanel();
 
     const panel = screen.getByRole('dialog', { name: '我的画布' });
     expect(screen.getByRole('heading', { name: '我的画布' })).toBeTruthy();
@@ -47,11 +43,11 @@ describe('CanvasManager', () => {
       fireEvent.click(screen.getByRole('button', { name: '新建画布' }));
     });
     expect(props.onCreate).toHaveBeenCalledTimes(1);
+    expect(props.onClose).toHaveBeenCalledTimes(1);
   });
 
   it('selects a board and closes the panel', () => {
     const props = renderManager();
-    openPanel();
 
     fireEvent.click(
       within(screen.getByRole('dialog', { name: '我的画布' }))
@@ -60,12 +56,11 @@ describe('CanvasManager', () => {
     );
 
     expect(props.onSelect).toHaveBeenCalledWith('two');
-    expect(screen.queryByRole('heading', { name: '我的画布' })).toBeNull();
+    expect(props.onClose).toHaveBeenCalledTimes(1);
   });
 
   it('renames a board inline', () => {
     const props = renderManager();
-    openPanel();
 
     fireEvent.click(screen.getByRole('button', { name: '重命名画布 设计稿' }));
     const input = screen.getByRole('textbox', { name: '画布名称' });
@@ -77,7 +72,6 @@ describe('CanvasManager', () => {
 
   it('deletes a board after confirmation', async () => {
     const props = renderManager();
-    openPanel();
 
     fireEvent.click(screen.getByRole('button', { name: '删除画布 设计稿' }));
     expect(screen.getByRole('heading', { name: '删除画布？' })).toBeTruthy();
@@ -86,5 +80,10 @@ describe('CanvasManager', () => {
       fireEvent.click(screen.getByRole('button', { name: '删除' }));
     });
     expect(props.onDelete).toHaveBeenCalledWith('one');
+  });
+
+  it('renders nothing when closed', () => {
+    renderManager({ open: false });
+    expect(screen.queryByRole('dialog', { name: '我的画布' })).toBeNull();
   });
 });

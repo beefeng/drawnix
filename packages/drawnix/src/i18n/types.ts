@@ -169,6 +169,10 @@ export interface Translations {
   'tutorial.appToolbar': string;
   'tutorial.creationToolbar': string;
   'tutorial.themeDescription': string;
+
+  'toast.saving': string;
+  'toast.saved': string;
+  'toast.saveNotCompleted': string;
 }
 
 // I18n context interface

@@ -18,6 +18,10 @@ describe('useDrawnixBoardStore', () => {
     const { result, storage } = await setup();
     const firstBoard = result.current.boards[0];
 
+    act(() => {
+      result.current.renameBoard(firstBoard.id, '设计稿');
+    });
+
     await act(async () => {
       await result.current.createBoard();
     });
@@ -25,7 +29,7 @@ describe('useDrawnixBoardStore', () => {
     const secondBoardId = result.current.activeBoardId;
     expect(result.current.boards).toHaveLength(2);
     expect(secondBoardId).not.toBe(firstBoard.id);
-    expect(result.current.activeBoard?.name).toBe('未命名画布 2');
+    expect(result.current.activeBoard?.name).toBe('未命名画布');
 
     act(() => {
       result.current.handleChange({ children: [element] });
@@ -47,6 +51,23 @@ describe('useDrawnixBoardStore', () => {
     expect(result.current.value.children).toEqual([element]);
   });
 
+  it('keeps only the latest untitled board when several are created at once', async () => {
+    const { result, storage } = await setup();
+    const initialBoardId = result.current.activeBoardId;
+
+    await act(async () => {
+      await Promise.all([result.current.createBoard(), result.current.createBoard()]);
+    });
+
+    expect(result.current.boards).toHaveLength(1);
+    expect(result.current.boards[0].name).toBe('未命名画布');
+    expect(storage.values.has(boardValueKey(initialBoardId))).toBe(false);
+    await waitFor(async () => {
+      const boards = await storage.getItem<BoardMeta[]>(BOARDS_INDEX_KEY);
+      expect(boards).toHaveLength(1);
+    });
+  });
+
   it('renames a board and persists the index', async () => {
     const { result, storage } = await setup();
     const boardId = result.current.activeBoardId;
@@ -62,9 +83,29 @@ describe('useDrawnixBoardStore', () => {
     });
   });
 
+  it('stores the saved file name on the board without changing its title', async () => {
+    const { result, storage } = await setup();
+    const boardId = result.current.activeBoardId;
+
+    act(() => {
+      result.current.markBoardFileSaved(boardId, '项目规划');
+    });
+
+    expect(result.current.activeBoard?.fileName).toBe('项目规划');
+    expect(result.current.activeBoard?.name).toBe('未命名画布');
+    await waitFor(async () => {
+      const boards = await storage.getItem<BoardMeta[]>(BOARDS_INDEX_KEY);
+      expect(boards?.[0].fileName).toBe('项目规划');
+    });
+  });
+
   it('switches away when deleting the active board and always keeps one board', async () => {
     const { result, storage } = await setup();
     const firstBoardId = result.current.activeBoardId;
+
+    act(() => {
+      result.current.renameBoard(firstBoardId, '设计稿');
+    });
 
     await act(async () => {
       await result.current.createBoard();
@@ -93,6 +134,10 @@ describe('useDrawnixBoardStore', () => {
     const { result, storage } = await setup();
     const firstBoardId = result.current.activeBoardId;
     const firstBoardHandleChange = result.current.handleChange;
+
+    act(() => {
+      result.current.renameBoard(firstBoardId, '设计稿');
+    });
 
     await act(async () => {
       await result.current.createBoard();

@@ -15,18 +15,28 @@ export const getDefaultName = () => {
   return time.toString();
 };
 
-export const saveAsJSON = async (board: PlaitBoard, name: string = getDefaultName()) => {
-  return saveJSON(board, null, name);
+export const saveAsJSON = async (
+  board: PlaitBoard,
+  name: string = getDefaultName(),
+  serialized?: string
+) => {
+  return saveJSON(board, null, name, serialized);
 };
 
 export const saveJSON = async (
   board: PlaitBoard,
   existingFileHandle: DrawnixFileHandle = null,
-  name: string = getDefaultName()
+  name: string = getDefaultName(),
+  serialized?: string
 ) => {
-  const serialized = serializeAsJSON(board);
-  const blob = new Blob([serialized], {
-    type: MIME_TYPES.drawnix,
+  // Keep serialization lazy so the native save picker can open immediately.
+  // Large boards can take a noticeable amount of time to stringify.
+  let serializedForSave = serialized;
+  const blob = Promise.resolve().then(() => {
+    serializedForSave = serializedForSave ?? serializeAsJSON(board);
+    return new Blob([serializedForSave], {
+      type: MIME_TYPES.drawnix,
+    });
   });
 
   const fileHandle = await fileSave(blob, {
@@ -35,7 +45,7 @@ export const saveJSON = async (
     description: 'Drawnix file',
     fileHandle: existingFileHandle,
   });
-  return { fileHandle };
+  return { fileHandle, serialized: serializedForSave };
 };
 
 export const loadFromJSON = async (board: PlaitBoard) => {

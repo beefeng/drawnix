@@ -10,6 +10,7 @@ import {
   createEmptyBoardValue,
   createUntitledBoardName,
   isBoardValueEmpty,
+  removeAllUntitledBoards,
   loadBoardCollection,
   loadBoardValue,
   removeBoardValue,
@@ -62,7 +63,17 @@ export const useDrawnixBoardStore = (storage: BoardStorage = localforage) => {
   const activeBoardIdRef = useRef('');
   const deletedBoardIdsRef = useRef(new Set<string>());
   const switchRequestRef = useRef(0);
+  const mutationQueueRef = useRef<Promise<unknown>>(Promise.resolve());
   const indexSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const runBoardMutation = <T>(operation: () => Promise<T>): Promise<T> => {
+    const result = mutationQueueRef.current.then(operation, operation);
+    mutationQueueRef.current = result.then(
+      () => undefined,
+      () => undefined
+    );
+    return result;
+  };
 
   const persistBoardsIndex = (nextBoards: BoardMeta[], immediate = false) => {
     boardsRef.current = nextBoards;
@@ -159,31 +170,35 @@ export const useDrawnixBoardStore = (storage: BoardStorage = localforage) => {
     storage.setItem(MAIN_BOARD_TOOL_STATE_KEY, toolState);
   };
 
-  const createBoard = async () => {
-    const id = createBoardId();
-    const now = Date.now();
-    const meta = createBoardMeta(
-      id,
-      createUntitledBoardName(boardsRef.current, preference.language),
-      now
-    );
-    const nextBoards = [meta, ...boardsRef.current];
-    const nextValue = createEmptyBoardValue();
+  const createBoard = () =>
+    runBoardMutation(async () => {
+      const id = createBoardId();
+      const now = Date.now();
+      const { boards: retainedBoards, removedIds } = removeAllUntitledBoards(boardsRef.current);
+      const meta = createBoardMeta(
+        id,
+        createUntitledBoardName(retainedBoards, preference.language),
+        now
+      );
+      const nextBoards = [meta, ...retainedBoards];
+      const nextValue = createEmptyBoardValue();
+      removedIds.forEach((boardId) => deletedBoardIdsRef.current.add(boardId));
 
-    await Promise.all([
-      saveBoardValue(storage, id, nextValue),
-      saveBoardsIndex(storage, nextBoards),
-      saveActiveBoardId(storage, id),
-    ]);
+      await Promise.all([
+        saveBoardValue(storage, id, nextValue),
+        saveBoardsIndex(storage, nextBoards),
+        saveActiveBoardId(storage, id),
+        ...removedIds.map((boardId) => removeBoardValue(storage, boardId)),
+      ]);
 
-    switchRequestRef.current += 1;
-    activeBoardIdRef.current = id;
-    setActiveBoardId(id);
-    setValue(nextValue);
-    setTutorial(true);
-    applyBoards(nextBoards, true);
-    return id;
-  };
+      switchRequestRef.current += 1;
+      activeBoardIdRef.current = id;
+      setActiveBoardId(id);
+      setValue(nextValue);
+      setTutorial(true);
+      applyBoards(nextBoards, true);
+      return id;
+    });
 
   const switchBoard = async (boardId: string) => {
     if (!boardId || boardId === activeBoardIdRef.current) {
@@ -213,43 +228,55 @@ export const useDrawnixBoardStore = (storage: BoardStorage = localforage) => {
     applyBoards(nextBoards, true);
   };
 
-  const deleteBoard = async (boardId: string) => {
-    deletedBoardIdsRef.current.add(boardId);
-    switchRequestRef.current += 1;
-    const remainingBoards = boardsRef.current.filter((board) => board.id !== boardId);
-    await removeBoardValue(storage, boardId);
-
-    if (boardId !== activeBoardIdRef.current) {
-      applyBoards(remainingBoards, true);
-      return;
-    }
-
-    if (remainingBoards.length > 0) {
-      const nextBoard = remainingBoards[0];
-      const nextValue = await loadBoardValue(storage, nextBoard.id);
-      activeBoardIdRef.current = nextBoard.id;
-      setActiveBoardId(nextBoard.id);
-      setValue(nextValue);
-      setTutorial(isBoardValueEmpty(nextValue));
-      applyBoards(remainingBoards, true);
-      await saveActiveBoardId(storage, nextBoard.id);
-      return;
-    }
-
-    const id = createBoardId();
-    const meta = createBoardMeta(id, createUntitledBoardName([], preference.language), Date.now());
-    const nextValue = createEmptyBoardValue();
-    await Promise.all([
-      saveBoardValue(storage, id, nextValue),
-      saveBoardsIndex(storage, [meta]),
-      saveActiveBoardId(storage, id),
-    ]);
-    activeBoardIdRef.current = id;
-    setActiveBoardId(id);
-    setValue(nextValue);
-    setTutorial(true);
-    applyBoards([meta], true);
+  const markBoardFileSaved = (boardId: string, fileName: string) => {
+    const nextBoards = boardsRef.current.map((board) =>
+      board.id === boardId ? { ...board, fileName } : board
+    );
+    applyBoards(nextBoards, true);
   };
+
+  const deleteBoard = (boardId: string) =>
+    runBoardMutation(async () => {
+      deletedBoardIdsRef.current.add(boardId);
+      switchRequestRef.current += 1;
+      const remainingBoards = boardsRef.current.filter((board) => board.id !== boardId);
+      await removeBoardValue(storage, boardId);
+
+      if (boardId !== activeBoardIdRef.current) {
+        applyBoards(remainingBoards, true);
+        return;
+      }
+
+      if (remainingBoards.length > 0) {
+        const nextBoard = remainingBoards[0];
+        const nextValue = await loadBoardValue(storage, nextBoard.id);
+        activeBoardIdRef.current = nextBoard.id;
+        setActiveBoardId(nextBoard.id);
+        setValue(nextValue);
+        setTutorial(isBoardValueEmpty(nextValue));
+        applyBoards(remainingBoards, true);
+        await saveActiveBoardId(storage, nextBoard.id);
+        return;
+      }
+
+      const id = createBoardId();
+      const meta = createBoardMeta(
+        id,
+        createUntitledBoardName([], preference.language),
+        Date.now()
+      );
+      const nextValue = createEmptyBoardValue();
+      await Promise.all([
+        saveBoardValue(storage, id, nextValue),
+        saveBoardsIndex(storage, [meta]),
+        saveActiveBoardId(storage, id),
+      ]);
+      activeBoardIdRef.current = id;
+      setActiveBoardId(id);
+      setValue(nextValue);
+      setTutorial(true);
+      applyBoards([meta], true);
+    });
 
   const activeBoard = boards.find((board) => board.id === activeBoardId);
 
@@ -269,6 +296,7 @@ export const useDrawnixBoardStore = (storage: BoardStorage = localforage) => {
     createBoard,
     switchBoard,
     renameBoard,
+    markBoardFileSaved,
     deleteBoard,
   };
 };
