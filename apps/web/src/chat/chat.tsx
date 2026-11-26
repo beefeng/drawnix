@@ -16,13 +16,11 @@ import {
 } from '@drawnix/drawnix';
 import { useDrawnixBoardStore } from '../app/board-store';
 import { getBoardNameAfterFileSave, getDefaultFileSaveName } from '../app/board-storage';
+import { clearChatMessages, loadChatMessages, saveChatMessages } from './chat-session-storage';
 import {
   DEFAULT_LLM_SETTINGS,
-  clearChatMessages,
-  loadChatMessages,
   loadLlmSettings,
   runChatTurn,
-  saveChatMessages,
   saveLlmSettings,
   testLlmConnection,
   type ChatMessage,
@@ -108,7 +106,8 @@ export function ChatApp() {
   const [settings, setSettings] = useState<LlmSettings>(() => loadLlmSettings());
   const [settingsOpen, setSettingsOpen] = useState(() => !loadLlmSettings().apiKey);
   const [showApiKey, setShowApiKey] = useState(false);
-  const [messages, setMessages] = useState<ChatMessage[]>(() => loadChatMessages());
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [messagesBoardId, setMessagesBoardId] = useState<string | null>(null);
   const [input, setInput] = useState('');
   const [draftImages, setDraftImages] = useState<ChatImage[]>([]);
   const [readingImages, setReadingImages] = useState(false);
@@ -154,13 +153,28 @@ export function ChatApp() {
   }, []);
 
   useEffect(() => {
-    const saveTimer = window.setTimeout(() => saveChatMessages(messages), 300);
     const container = messageListRef.current;
     if (container) {
       container.scrollTop = container.scrollHeight;
     }
+    if (!loaded || !activeBoardId || messagesBoardId !== activeBoardId) {
+      return;
+    }
+    const saveTimer = window.setTimeout(() => saveChatMessages(activeBoardId, messages), 300);
     return () => window.clearTimeout(saveTimer);
-  }, [messages]);
+  }, [activeBoardId, loaded, messages, messagesBoardId]);
+
+  useEffect(() => {
+    if (!loaded || !activeBoardId) {
+      return;
+    }
+    abortRef.current?.abort();
+    setMessages(loadChatMessages(activeBoardId));
+    setMessagesBoardId(activeBoardId);
+    setLiveMessageId(null);
+    setBusy(false);
+    setError(null);
+  }, [activeBoardId, loaded]);
 
   useEffect(() => {
     if (!busy) {
@@ -520,7 +534,7 @@ export function ChatApp() {
     setDraftImages([]);
     setImageError(null);
     setError(null);
-    clearChatMessages();
+    clearChatMessages(activeBoardId);
   };
 
   const continueLastTask = () => {

@@ -127,7 +127,6 @@ export const DEFAULT_LLM_SETTINGS: LlmSettings =
   import.meta.env.DEV && DEV_LLM_SETTINGS.baseUrl ? DEV_LLM_SETTINGS : PRODUCTION_LLM_SETTINGS;
 
 const LLM_SETTINGS_KEY = 'drawnix_chat_llm_settings';
-const CHAT_MESSAGES_KEY = 'drawnix_chat_messages';
 const MAX_TOOL_ROUNDS = 100;
 const LLM_PROXY_PATH = '/__drawnix_llm_proxy';
 
@@ -418,63 +417,6 @@ export const loadLlmSettings = (): LlmSettings => {
 
 export const saveLlmSettings = (settings: LlmSettings) => {
   localStorage.setItem(LLM_SETTINGS_KEY, JSON.stringify(settings));
-};
-
-export const loadChatMessages = (): ChatMessage[] => {
-  try {
-    const stored = localStorage.getItem(CHAT_MESSAGES_KEY);
-    if (!stored) {
-      return [];
-    }
-    const messages = JSON.parse(stored);
-    return Array.isArray(messages) ? messages : [];
-  } catch {
-    return [];
-  }
-};
-
-export const saveChatMessages = (messages: ChatMessage[]) => {
-  const persistable = messages.filter(
-    (message) => message.role === 'user' || message.content.trim().length > 0
-  );
-  const nextMessages = persistable.slice(-80);
-  const write = () => {
-    localStorage.setItem(CHAT_MESSAGES_KEY, JSON.stringify(nextMessages));
-  };
-  try {
-    write();
-    return;
-  } catch {
-    // localStorage 配额通常被粘贴的图片占满，从最早的图片开始降级保存。
-  }
-
-  for (let index = 0; index < nextMessages.length; index++) {
-    const message = nextMessages[index];
-    if (!message.images?.length) {
-      continue;
-    }
-    nextMessages[index] = {
-      ...message,
-      images: undefined,
-      omittedImageCount: (message.omittedImageCount ?? 0) + message.images.length,
-    };
-    try {
-      write();
-      return;
-    } catch {
-      // 继续清理下一张历史图片。
-    }
-  }
-
-  try {
-    localStorage.setItem(CHAT_MESSAGES_KEY, JSON.stringify(nextMessages.slice(-20)));
-  } catch {
-    localStorage.removeItem(CHAT_MESSAGES_KEY);
-  }
-};
-
-export const clearChatMessages = () => {
-  localStorage.removeItem(CHAT_MESSAGES_KEY);
 };
 
 const normalizeEndpoint = (baseUrl: string) => {
