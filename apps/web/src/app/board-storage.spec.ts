@@ -8,9 +8,11 @@ import {
   getDefaultFileSaveName,
   isUntitledBoardName,
   loadBoardCollection,
+  removeBoardValue,
   type BoardMeta,
 } from './board-storage';
 import { createMemoryBoardStorage } from './board-storage.test-utils';
+import { loadChatMessages, saveChatMessages } from '../chat/chat-session-storage';
 
 const element = { id: 'element-1' } as unknown as PlaitElement;
 
@@ -22,6 +24,10 @@ const board = (id: string, name: string, updatedAt = 1): BoardMeta => ({
 });
 
 describe('board storage', () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
   it('creates an initial blank board', async () => {
     const storage = createMemoryBoardStorage();
 
@@ -121,5 +127,17 @@ describe('board storage', () => {
     expect(getDefaultFileSaveName(untitled, 'en')).toMatch(
       /^Canvas \d{4}-\d{2}-\d{2} \d{2}-\d{2}$/
     );
+  });
+
+  it('removes the matching chat session when a board is removed', async () => {
+    const storage = createMemoryBoardStorage();
+    await storage.setItem('board:one', { children: [] });
+    saveChatMessages('one', [
+      { id: 'message-1', role: 'user', content: '画一个流程图', createdAt: 1 },
+    ]);
+
+    await removeBoardValue(storage, 'one');
+
+    expect(loadChatMessages('one')).toEqual([]);
   });
 });
