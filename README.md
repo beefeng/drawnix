@@ -42,6 +42,15 @@
 
 [*English README*](https://github.com/plait-board/drawnix/blob/develop/README_en.md)
 
+## Fork 修改
+
+本仓库基于上游 Drawnix 开发，以下为当前 Fork 新增或调整的用户可见能力：
+
+- 🗂️ 多画布管理：新建画布前提示保存、切换、重命名、删除
+- ⌨️ 工具栏快捷键提示，悬停展开形状、箭头和画笔菜单
+- 🤖 提供 Agent 操作 API（[文档](docs/agent-api.md)）
+- 💬 内置 AI 对话页面：流式回复、展示工具进度，网络中断后可继续上次任务（[文档](docs/chat.md)）
+
 ## 特性
 
 - 💯 免费 + 开源
