@@ -8,14 +8,9 @@ import {
   type KeyboardEvent,
   type PointerEvent,
 } from 'react';
-import {
-  Drawnix,
-  createDrawnixAgent,
-  type DrawnixAgent,
-  type DrawnixFileSaveResult,
-} from '@drawnix/drawnix';
+import { createDrawnixAgent, type DrawnixAgent } from '@drawnix/drawnix';
 import { useDrawnixBoardStore } from '../app/board-store';
-import { getBoardNameAfterFileSave, getDefaultFileSaveName } from '../app/board-storage';
+import { CanvasWorkspace } from '../app/canvas-workspace';
 import { clearChatMessages, loadChatMessages, saveChatMessages } from './chat-session-storage';
 import {
   DEFAULT_LLM_SETTINGS,
@@ -90,19 +85,8 @@ type ConnectionTestState = {
 };
 
 export function ChatApp() {
-  const {
-    loaded,
-    activeBoard,
-    activeBoardId,
-    value,
-    initialToolState,
-    preference,
-    updatePreference,
-    handleChange,
-    handleToolStateChange,
-    renameBoard,
-    markBoardFileSaved,
-  } = useDrawnixBoardStore();
+  const store = useDrawnixBoardStore();
+  const { loaded, activeBoardId, value } = store;
   const [settings, setSettings] = useState<LlmSettings>(() => loadLlmSettings());
   const [settingsOpen, setSettingsOpen] = useState(() => !loadLlmSettings().apiKey);
   const [showApiKey, setShowApiKey] = useState(false);
@@ -552,54 +536,21 @@ export function ChatApp() {
     return null;
   }
 
-  const handleFileSaved = (result: DrawnixFileSaveResult) => {
-    if (!result.fileName || !activeBoard) {
-      return;
-    }
-    const nextName = getBoardNameAfterFileSave(activeBoard.name, result.fileName, result.isNewFile);
-    if (nextName !== activeBoard.name) {
-      renameBoard(activeBoardId, nextName);
-    }
-    markBoardFileSaved(activeBoardId, result.fileName);
-  };
-
   return (
     <div
       className={`chat-page chat-theme--${themeMode} ${resizingPanel ? 'chat-page--resizing' : ''}`}
       style={{ '--chat-panel-width': `${panelWidth}px` } as CSSProperties}
     >
-      <div className="chat-board">
-        <Drawnix
-          value={value.children}
-          viewport={value.viewport}
-          theme={value.theme}
-          initialToolState={initialToolState}
-          initialLanguage={preference.language}
-          defaultFileName={
-            activeBoard ? getDefaultFileSaveName(activeBoard, preference.language) : undefined
-          }
-          initialPreference={{
-            copyTransparent: preference.copyTransparent,
-            exportTransparent: preference.exportTransparent,
-          }}
-          onLanguageChange={(language) => updatePreference({ language })}
-          onPreferenceChange={({ copyTransparent, exportTransparent }) => {
-            updatePreference({ copyTransparent, exportTransparent });
-          }}
-          onChange={(nextValue) => {
-            handleChange(nextValue as Parameters<typeof handleChange>[0]);
-          }}
-          onToolStateChange={handleToolStateChange}
-          onThemeChange={(nextTheme) => setThemeMode(nextTheme as ChatThemeMode)}
-          tutorial={false}
-          onFileSaved={handleFileSaved}
-          agent
-          afterInit={(board) => {
-            agentRef.current = createDrawnixAgent(board);
-            setAgentReady(true);
-          }}
-        />
-      </div>
+      <CanvasWorkspace
+        store={store}
+        boardWrapperClassName="chat-board"
+        agent
+        onThemeChange={(nextTheme) => setThemeMode(nextTheme as ChatThemeMode)}
+        onBoardReady={(board) => {
+          agentRef.current = createDrawnixAgent(board);
+          setAgentReady(true);
+        }}
+      />
 
       <div
         className="chat-resizer"
