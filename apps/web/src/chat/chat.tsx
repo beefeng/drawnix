@@ -2,6 +2,7 @@ import {
   useEffect,
   useRef,
   useState,
+  type ClipboardEvent,
   type CSSProperties,
   type FormEvent,
   type KeyboardEvent,
@@ -28,6 +29,7 @@ import {
   type ChatTurnEvent,
   type LlmSettings,
 } from './llm';
+import { isSupportedChatImageFile, readChatImage, type ChatImage } from './chat-image';
 import './chat.scss';
 
 const EXAMPLE_PROMPTS = [
@@ -43,6 +45,7 @@ const CHAT_PANEL_WIDTH_KEY = 'drawnix_chat_panel_width';
 const DEFAULT_PANEL_WIDTH = 430;
 const MIN_PANEL_WIDTH = 320;
 const MAX_PANEL_WIDTH = 720;
+const MAX_DRAFT_IMAGES = 4;
 
 const getMaxPanelWidth = () => {
   if (typeof window === 'undefined') {
@@ -107,6 +110,9 @@ export function ChatApp() {
   const [showApiKey, setShowApiKey] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>(() => loadChatMessages());
   const [input, setInput] = useState('');
+  const [draftImages, setDraftImages] = useState<ChatImage[]>([]);
+  const [readingImages, setReadingImages] = useState(false);
+  const [imageError, setImageError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [activity, setActivity] = useState('正在理解需求…');
   const [elapsedMs, setElapsedMs] = useState(0);
@@ -217,9 +223,9 @@ export function ChatApp() {
     }
   };
 
-  const submitMessage = async (content: string) => {
+  const submitMessage = async (content: string, images: ChatImage[] = []) => {
     const trimmed = content.trim();
-    if (!trimmed || busy) {
+    if ((!trimmed && images.length === 0) || busy) {
       return;
     }
     const agent = agentRef.current ?? window.drawnixAgent;
@@ -238,6 +244,7 @@ export function ChatApp() {
       role: 'user',
       content: trimmed,
       createdAt: Date.now(),
+      images: images.length > 0 ? images : undefined,
     };
     const assistantId = createMessageId();
     const nextMessages = [...messages, userMessage];
@@ -257,6 +264,8 @@ export function ChatApp() {
     reasoningCharsRef.current = 0;
     setReasoningChars(0);
     setInput('');
+    setDraftImages([]);
+    setImageError(null);
     setError(null);
     setSettingsOpen(false);
     setBusy(true);
@@ -408,14 +417,55 @@ export function ChatApp() {
 
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault();
-    void submitMessage(input);
+    void submitMessage(input, draftImages);
   };
 
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
       event.preventDefault();
-      void submitMessage(input);
+      void submitMessage(input, draftImages);
     }
+  };
+
+  const handlePaste = async (event: ClipboardEvent<HTMLElement>) => {
+    const clipboardFiles = Array.from(event.clipboardData.files);
+    if (clipboardFiles.length === 0) {
+      Array.from(event.clipboardData.items).forEach((item) => {
+        const file = item.kind === 'file' ? item.getAsFile() : null;
+        if (file) {
+          clipboardFiles.push(file);
+        }
+      });
+    }
+    const files = clipboardFiles.filter(isSupportedChatImageFile);
+    if (files.length === 0) {
+      return;
+    }
+    event.preventDefault();
+    const availableSlots = MAX_DRAFT_IMAGES - draftImages.length;
+    if (availableSlots <= 0) {
+      setImageError(`每条消息最多添加 ${MAX_DRAFT_IMAGES} 张图片。`);
+      return;
+    }
+    const acceptedFiles = files.slice(0, availableSlots);
+    setImageError(
+      files.length > availableSlots ? `每条消息最多添加 ${MAX_DRAFT_IMAGES} 张图片。` : null
+    );
+    setReadingImages(true);
+    try {
+      const images = await Promise.all(acceptedFiles.map(readChatImage));
+      setDraftImages((current) => [...current, ...images].slice(0, MAX_DRAFT_IMAGES));
+    } catch (pasteError) {
+      setImageError(pasteError instanceof Error ? pasteError.message : '读取图片失败。');
+    } finally {
+      setReadingImages(false);
+      inputRef.current?.focus();
+    }
+  };
+
+  const removeDraftImage = (imageId: string) => {
+    setDraftImages((current) => current.filter((image) => image.id !== imageId));
+    setImageError(null);
   };
 
   const stopTurn = () => {
@@ -467,6 +517,8 @@ export function ChatApp() {
   const clearConversation = () => {
     abortRef.current?.abort();
     setMessages([]);
+    setDraftImages([]);
+    setImageError(null);
     setError(null);
     clearChatMessages();
   };
@@ -554,7 +606,7 @@ export function ChatApp() {
         <span />
       </div>
 
-      <aside className="chat-panel">
+      <aside className="chat-panel" onPaste={(event) => void handlePaste(event)}>
         <header className="chat-header">
           <a className="chat-back" href="#/" aria-label="返回画布">
             <span aria-hidden="true">←</span>
@@ -675,6 +727,18 @@ export function ChatApp() {
                 <div className="chat-message__meta">
                   {message.role === 'user' ? 'YOU' : 'AGENT'}
                 </div>
+                {message.images && message.images.length > 0 && (
+                  <div className="chat-message__images">
+                    {message.images.map((image) => (
+                      <img key={image.id} src={image.dataUrl} alt={image.name} loading="lazy" />
+                    ))}
+                  </div>
+                )}
+                {message.omittedImageCount ? (
+                  <div className="chat-message__image-note">
+                    已清理 {message.omittedImageCount} 张历史图片
+                  </div>
+                ) : null}
                 {message.steps && message.steps.length > 0 && (
                   <ol className="chat-steps" aria-label="执行步骤">
                     {message.steps.map((step) => (
@@ -730,23 +794,55 @@ export function ChatApp() {
         </div>
 
         <form className="chat-composer" onSubmit={handleSubmit}>
+          {draftImages.length > 0 && (
+            <div className="chat-attachments" aria-label="待发送图片">
+              {draftImages.map((image) => (
+                <div className="chat-attachment" key={image.id}>
+                  <img src={image.dataUrl} alt={image.name} />
+                  <button
+                    type="button"
+                    aria-label={`移除 ${image.name}`}
+                    onClick={() => removeDraftImage(image.id)}
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
           <textarea
             ref={inputRef}
             value={input}
             rows={2}
-            placeholder={agentReady ? '例如：画一个用户登录流程…' : '画布加载中…'}
+            placeholder={agentReady ? '描述你想要的图，或直接粘贴图片…' : '画布加载中…'}
             disabled={!agentReady}
             onChange={(event) => setInput(event.target.value)}
             onKeyDown={handleKeyDown}
           />
+          {imageError && (
+            <div className="chat-composer__error" role="alert">
+              {imageError}
+            </div>
+          )}
           <div className="chat-composer__actions">
-            <span>Enter 发送 · Shift+Enter 换行</span>
+            <span>
+              {readingImages
+                ? '正在读取图片…'
+                : draftImages.length > 0
+                  ? `已添加 ${draftImages.length} 张图片 · Enter 发送`
+                  : '可粘贴图片 · Enter 发送 · Shift+Enter 换行'}
+            </span>
             {busy ? (
               <button className="chat-stop" type="button" onClick={stopTurn}>
                 停止
               </button>
             ) : (
-              <button type="submit" disabled={!input.trim() || !agentReady}>
+              <button
+                type="submit"
+                disabled={
+                  (!input.trim() && draftImages.length === 0) || !agentReady || readingImages
+                }
+              >
                 发送
               </button>
             )}

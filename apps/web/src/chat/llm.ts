@@ -4,6 +4,7 @@ import type {
   DrawnixAgentElementUpdate,
   DrawnixAgentOperationResult,
 } from '@drawnix/drawnix';
+import type { ChatImage } from './chat-image';
 
 export type LlmSettings = {
   baseUrl: string;
@@ -17,6 +18,8 @@ export type ChatMessage = {
   content: string;
   createdAt: number;
   steps?: ChatStep[];
+  images?: ChatImage[];
+  omittedImageCount?: number;
 };
 
 export type ChatStep = {
@@ -57,9 +60,13 @@ type OpenAiToolCall = {
   };
 };
 
+type OpenAiContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string } };
+
 type OpenAiMessage = {
   role: 'system' | 'user' | 'assistant' | 'tool';
-  content: string | null;
+  content: string | OpenAiContentPart[] | null;
   tool_calls?: OpenAiToolCall[];
   tool_call_id?: string;
   name?: string;
@@ -430,7 +437,40 @@ export const saveChatMessages = (messages: ChatMessage[]) => {
   const persistable = messages.filter(
     (message) => message.role === 'user' || message.content.trim().length > 0
   );
-  localStorage.setItem(CHAT_MESSAGES_KEY, JSON.stringify(persistable.slice(-80)));
+  const nextMessages = persistable.slice(-80);
+  const write = () => {
+    localStorage.setItem(CHAT_MESSAGES_KEY, JSON.stringify(nextMessages));
+  };
+  try {
+    write();
+    return;
+  } catch {
+    // localStorage 配额通常被粘贴的图片占满，从最早的图片开始降级保存。
+  }
+
+  for (let index = 0; index < nextMessages.length; index++) {
+    const message = nextMessages[index];
+    if (!message.images?.length) {
+      continue;
+    }
+    nextMessages[index] = {
+      ...message,
+      images: undefined,
+      omittedImageCount: (message.omittedImageCount ?? 0) + message.images.length,
+    };
+    try {
+      write();
+      return;
+    } catch {
+      // 继续清理下一张历史图片。
+    }
+  }
+
+  try {
+    localStorage.setItem(CHAT_MESSAGES_KEY, JSON.stringify(nextMessages.slice(-20)));
+  } catch {
+    localStorage.removeItem(CHAT_MESSAGES_KEY);
+  }
 };
 
 export const clearChatMessages = () => {
@@ -784,6 +824,48 @@ const toExecutionError = (message: string): DrawnixAgentOperationResult => ({
   },
 });
 
+const MAX_HISTORY_IMAGES = 8;
+
+const toOpenAiContent = (
+  message: ChatMessage,
+  imageCount: number
+): string | OpenAiContentPart[] => {
+  const text = message.content.trim();
+  const images = (message.images ?? []).slice(0, imageCount);
+  if (images.length === 0) {
+    return text;
+  }
+  const parts: OpenAiContentPart[] = [];
+  parts.push({ type: 'text', text: text || '请参考这张图片。' });
+  images.forEach((image) => {
+    parts.push({
+      type: 'image_url',
+      image_url: {
+        url: image.dataUrl,
+      },
+    });
+  });
+  return parts;
+};
+
+const buildOpenAiHistory = (messages: ChatMessage[]): OpenAiMessage[] => {
+  const history = messages
+    .filter((message) => message.role === 'user' || message.role === 'assistant')
+    .slice(-20);
+  const imageBudget = new Map<string, number>();
+  let remainingImages = MAX_HISTORY_IMAGES;
+  for (let index = history.length - 1; index >= 0; index--) {
+    const message = history[index];
+    const count = Math.min(message.images?.length ?? 0, remainingImages);
+    imageBudget.set(message.id, count);
+    remainingImages -= count;
+  }
+  return history.map((message) => ({
+    role: message.role,
+    content: toOpenAiContent(message, imageBudget.get(message.id) ?? 0),
+  }));
+};
+
 const getArrayLength = (value: unknown): number | null => {
   return Array.isArray(value) ? value.length : null;
 };
@@ -919,13 +1001,7 @@ export const runChatTurn = async ({
 
   const apiMessages: OpenAiMessage[] = [
     { role: 'system', content: buildSystemPrompt(agent) },
-    ...messages
-      .filter((message) => message.role === 'user' || message.role === 'assistant')
-      .slice(-20)
-      .map((message) => ({
-        role: message.role,
-        content: message.content,
-      })),
+    ...buildOpenAiHistory(messages),
   ];
   const toolNames: string[] = [];
   let roundCount = 0;
