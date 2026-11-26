@@ -3,6 +3,7 @@ import type { ChatMessage } from './llm';
 const CHAT_MESSAGES_KEY_PREFIX = 'drawnix_chat_messages:';
 const LEGACY_CHAT_MESSAGES_KEY = 'drawnix_chat_messages';
 const MAX_PERSISTED_MESSAGES = 80;
+const MIN_PERSISTED_MESSAGES = 20;
 
 const getChatMessagesKey = (boardId: string) => `${CHAT_MESSAGES_KEY_PREFIX}${boardId}`;
 
@@ -47,13 +48,44 @@ export const saveChatMessages = (boardId: string, messages: ChatMessage[]) => {
   const persistable = messages.filter(
     (message) => message.role === 'user' || message.content.trim().length > 0
   );
+  const storageKey = getChatMessagesKey(boardId);
+  const nextMessages = persistable.slice(-MAX_PERSISTED_MESSAGES);
+  const write = () => {
+    localStorage.setItem(storageKey, JSON.stringify(nextMessages));
+  };
   try {
-    localStorage.setItem(
-      getChatMessagesKey(boardId),
-      JSON.stringify(persistable.slice(-MAX_PERSISTED_MESSAGES))
-    );
+    write();
+    return;
   } catch {
-    // Storage can be unavailable or full; keep the in-memory conversation usable.
+    // localStorage 配额通常被粘贴的图片占满，从最早的图片开始降级保存。
+  }
+
+  for (let index = 0; index < nextMessages.length; index++) {
+    const message = nextMessages[index];
+    if (!message.images?.length) {
+      continue;
+    }
+    nextMessages[index] = {
+      ...message,
+      images: undefined,
+      omittedImageCount: (message.omittedImageCount ?? 0) + message.images.length,
+    };
+    try {
+      write();
+      return;
+    } catch {
+      // 继续清理下一张历史图片。
+    }
+  }
+
+  try {
+    localStorage.setItem(storageKey, JSON.stringify(nextMessages.slice(-MIN_PERSISTED_MESSAGES)));
+  } catch {
+    try {
+      localStorage.removeItem(storageKey);
+    } catch {
+      // Storage can be unavailable; keep the in-memory conversation usable.
+    }
   }
 };
 

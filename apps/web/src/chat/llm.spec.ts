@@ -322,6 +322,91 @@ describe('chat llm tools', () => {
     });
   });
 
+  it('sends pasted images as multimodal user content', async () => {
+    const { agent } = createAgentMock();
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ choices: [{ message: { content: '收到图片。' } }] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await runChatTurn({
+      agent,
+      settings,
+      messages: [
+        {
+          ...userMessage,
+          content: '照着这张图画',
+          images: [
+            {
+              id: 'image-1',
+              dataUrl: 'data:image/png;base64,abc',
+              name: '截图.png',
+              mimeType: 'image/png',
+              width: 320,
+              height: 180,
+              size: 3,
+            },
+          ],
+        },
+      ],
+    });
+
+    const requestBody = JSON.parse(String(fetchMock.mock.calls[0][1].body));
+    const userContent = requestBody.messages.find(
+      (message: { role: string }) => message.role === 'user'
+    ).content;
+    expect(userContent).toEqual([
+      { type: 'text', text: '照着这张图画' },
+      { type: 'image_url', image_url: { url: 'data:image/png;base64,abc' } },
+    ]);
+  });
+
+  it('adds a fallback prompt when only an image is sent', async () => {
+    const { agent } = createAgentMock();
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ choices: [{ message: { content: '收到图片。' } }] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await runChatTurn({
+      agent,
+      settings,
+      messages: [
+        {
+          ...userMessage,
+          content: '',
+          images: [
+            {
+              id: 'image-2',
+              dataUrl: 'data:image/jpeg;base64,xyz',
+              name: '截图.jpg',
+              mimeType: 'image/jpeg',
+              width: 100,
+              height: 100,
+              size: 3,
+            },
+          ],
+        },
+      ],
+    });
+
+    const requestBody = JSON.parse(String(fetchMock.mock.calls[0][1].body));
+    const userContent = requestBody.messages.find(
+      (message: { role: string }) => message.role === 'user'
+    ).content;
+    expect(userContent[0]).toEqual({ type: 'text', text: '请参考这张图片。' });
+    expect(userContent[1]).toMatchObject({
+      type: 'image_url',
+      image_url: { url: 'data:image/jpeg;base64,xyz' },
+    });
+  });
+
   it('retries once when the request fails at the network layer', async () => {
     const { agent } = createAgentMock();
     const fetchMock = vi

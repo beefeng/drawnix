@@ -4,6 +4,7 @@ import type {
   DrawnixAgentElementUpdate,
   DrawnixAgentOperationResult,
 } from '@drawnix/drawnix';
+import type { ChatImage } from './chat-image';
 
 export type LlmSettings = {
   baseUrl: string;
@@ -17,6 +18,8 @@ export type ChatMessage = {
   content: string;
   createdAt: number;
   steps?: ChatStep[];
+  images?: ChatImage[];
+  omittedImageCount?: number;
 };
 
 export type ChatStep = {
@@ -57,9 +60,13 @@ type OpenAiToolCall = {
   };
 };
 
+type OpenAiContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string } };
+
 type OpenAiMessage = {
   role: 'system' | 'user' | 'assistant' | 'tool';
-  content: string | null;
+  content: string | OpenAiContentPart[] | null;
   tool_calls?: OpenAiToolCall[];
   tool_call_id?: string;
   name?: string;
@@ -759,6 +766,48 @@ const toExecutionError = (message: string): DrawnixAgentOperationResult => ({
   },
 });
 
+const MAX_HISTORY_IMAGES = 8;
+
+const toOpenAiContent = (
+  message: ChatMessage,
+  imageCount: number
+): string | OpenAiContentPart[] => {
+  const text = message.content.trim();
+  const images = (message.images ?? []).slice(0, imageCount);
+  if (images.length === 0) {
+    return text;
+  }
+  const parts: OpenAiContentPart[] = [];
+  parts.push({ type: 'text', text: text || '请参考这张图片。' });
+  images.forEach((image) => {
+    parts.push({
+      type: 'image_url',
+      image_url: {
+        url: image.dataUrl,
+      },
+    });
+  });
+  return parts;
+};
+
+const buildOpenAiHistory = (messages: ChatMessage[]): OpenAiMessage[] => {
+  const history = messages
+    .filter((message) => message.role === 'user' || message.role === 'assistant')
+    .slice(-20);
+  const imageBudget = new Map<string, number>();
+  let remainingImages = MAX_HISTORY_IMAGES;
+  for (let index = history.length - 1; index >= 0; index--) {
+    const message = history[index];
+    const count = Math.min(message.images?.length ?? 0, remainingImages);
+    imageBudget.set(message.id, count);
+    remainingImages -= count;
+  }
+  return history.map((message) => ({
+    role: message.role,
+    content: toOpenAiContent(message, imageBudget.get(message.id) ?? 0),
+  }));
+};
+
 const getArrayLength = (value: unknown): number | null => {
   return Array.isArray(value) ? value.length : null;
 };
@@ -894,13 +943,7 @@ export const runChatTurn = async ({
 
   const apiMessages: OpenAiMessage[] = [
     { role: 'system', content: buildSystemPrompt(agent) },
-    ...messages
-      .filter((message) => message.role === 'user' || message.role === 'assistant')
-      .slice(-20)
-      .map((message) => ({
-        role: message.role,
-        content: message.content,
-      })),
+    ...buildOpenAiHistory(messages),
   ];
   const toolNames: string[] = [];
   let roundCount = 0;
