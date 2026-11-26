@@ -120,7 +120,6 @@ export const DEFAULT_LLM_SETTINGS: LlmSettings =
   import.meta.env.DEV && DEV_LLM_SETTINGS.baseUrl ? DEV_LLM_SETTINGS : PRODUCTION_LLM_SETTINGS;
 
 const LLM_SETTINGS_KEY = 'drawnix_chat_llm_settings';
-const CHAT_MESSAGES_KEY = 'drawnix_chat_messages';
 const MAX_TOOL_ROUNDS = 100;
 const LLM_PROXY_PATH = '/__drawnix_llm_proxy';
 
@@ -411,30 +410,6 @@ export const loadLlmSettings = (): LlmSettings => {
 
 export const saveLlmSettings = (settings: LlmSettings) => {
   localStorage.setItem(LLM_SETTINGS_KEY, JSON.stringify(settings));
-};
-
-export const loadChatMessages = (): ChatMessage[] => {
-  try {
-    const stored = localStorage.getItem(CHAT_MESSAGES_KEY);
-    if (!stored) {
-      return [];
-    }
-    const messages = JSON.parse(stored);
-    return Array.isArray(messages) ? messages : [];
-  } catch {
-    return [];
-  }
-};
-
-export const saveChatMessages = (messages: ChatMessage[]) => {
-  const persistable = messages.filter(
-    (message) => message.role === 'user' || message.content.trim().length > 0
-  );
-  localStorage.setItem(CHAT_MESSAGES_KEY, JSON.stringify(persistable.slice(-80)));
-};
-
-export const clearChatMessages = () => {
-  localStorage.removeItem(CHAT_MESSAGES_KEY);
 };
 
 const normalizeEndpoint = (baseUrl: string) => {

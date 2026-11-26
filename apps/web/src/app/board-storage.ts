@@ -1,4 +1,5 @@
 import type { PlaitElement, PlaitTheme, Viewport } from '@plait/core';
+import { clearChatMessages } from '../chat/chat-session-storage';
 
 export type Language = 'zh' | 'en' | 'ru' | 'ar' | 'vi';
 
@@ -222,6 +223,7 @@ export const saveActiveBoardId = async (storage: BoardStorage, boardId: string) 
 
 export const removeBoardValue = async (storage: BoardStorage, boardId: string) => {
   await storage.removeItem(boardValueKey(boardId));
+  clearChatMessages(boardId);
 };
 
 /**
